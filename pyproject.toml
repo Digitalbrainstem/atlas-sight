@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "atlas-sight"
+version = "0.1.0"
+description = "Offline accessibility assistant for visually impaired people"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Atlas Project"},
+]
+keywords = ["accessibility", "vision", "blind", "assistive-technology", "offline"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Adaptive Technologies",
+]
+
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+vision = [
+    "opencv-python-headless>=4.8",
+    "Pillow>=10.0",
+    "transformers>=4.40",
+    "torch>=2.1",
+]
+voice = [
+    "openai-whisper>=20231117",
+    "piper-tts>=1.2",
+    "sounddevice>=0.4",
+]
+full = [
+    "atlas-sight[vision,voice]",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+atlas-sight = "atlas_sight.core.engine:main"
+
+[tool.setuptools.packages.find]
+include = ["atlas_sight*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
