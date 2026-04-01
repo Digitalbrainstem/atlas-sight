@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "AtlasSight"
 include(":app")
+include(":lib")

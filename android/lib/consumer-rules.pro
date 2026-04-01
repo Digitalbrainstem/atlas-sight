@@ -1,0 +1,1 @@
+-keep class dev.atlascortex.sight.vlm.VisionInferenceEngine { *; }

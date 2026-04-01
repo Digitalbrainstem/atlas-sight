@@ -92,8 +92,8 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
 
-    // ONNX Runtime
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    // VLM native inference (llama.cpp + mtmd)
+    implementation(project(":lib"))
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
