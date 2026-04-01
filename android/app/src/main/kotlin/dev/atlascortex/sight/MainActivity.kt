@@ -50,6 +50,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Fix sideload launch: installer opens app in its own task stack.
+        // Redirect to launcher so permissions + lifecycle work correctly.
+        if (!isTaskRoot && intent.hasCategory(android.content.Intent.CATEGORY_LAUNCHER)) {
+            finish()
+            return
+        }
+
         engine = SightEngine(this)
         modelDownloader = ModelDownloader(this)
         permissions = Permissions(this)
