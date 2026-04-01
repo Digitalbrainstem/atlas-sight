@@ -1,19 +1,25 @@
-# Atlas Sight — Native Android App Plan
+# Atlas Sight — Native App Plan (Android + iOS)
 
 > A voice-first accessibility app for visually impaired users.
 > Fully offline. No cloud. No configuration. Works out of the box.
 
-## Architecture: Local-First, Zero-Server
+## Architecture: Local-First, Zero-Server, Cross-Platform
 
 Everything runs on-device. No Atlas Cortex server required. No internet after
 initial model download. This is critical — visually impaired users need this to
 work at the grocery store, on the sidewalk, anywhere.
 
+**Cross-platform strategy:** Shared core logic (modes, commands, data models,
+audio synthesis) with platform-native UI and hardware access. Sherpa-ONNX and
+ONNX Runtime provide the same models on both Android and iOS.
+
 ## Target
 
-- **v1:** Personal use + sideload testing
-- **v2:** Play Store distribution
-- Package: `dev.atlascortex.sight`
+- **v1:** Android (Personal use + sideload testing)
+- **v2:** iOS port (same architecture, Swift + SwiftUI)
+- **v3:** Play Store + App Store distribution
+- Android package: `dev.atlascortex.sight`
+- iOS bundle: `dev.atlascortex.sight`
 
 ---
 
@@ -21,37 +27,62 @@ work at the grocery store, on the sidewalk, anywhere.
 
 | Component | Technology | Size | Why |
 |-----------|-----------|------|-----|
-| **Language** | Kotlin | — | Native Android, best accessibility API access |
-| **UI Framework** | Jetpack Compose | — | Minimal visual UI, but needed for TalkBack integration |
-| **Camera** | CameraX | — | Modern, lifecycle-aware, preview + capture |
-| **VLM (Vision)** | Gemma 3n E4B via MediaPipe/LiteRT | ~1.5GB | Purpose-built for Android VLM, INT4, 3GB RAM, offline |
-| **STT** | Sherpa-ONNX + Whisper small | ~200MB | Fully offline, Kotlin API, wake word support |
-| **TTS** | Sherpa-ONNX + Piper voices | ~15MB | Offline, configurable speed, priority queue |
-| **Gestures** | GestureDetector + SensorManager | — | Touch + accelerometer (shake) |
-| **Haptics** | VibrationEffect API | — | Predefined patterns, no permissions on Android 13+ |
-| **Audio Cues** | AudioTrack (PCM synthesis) | — | Sine wave tones, zero audio files shipped |
-| **Total on-device** | | **~1.7GB** | Fits comfortably on any modern phone |
+| **Language** | Kotlin (Android) / Swift (iOS) | — | Native per-platform, best accessibility API access |
+| **UI Framework** | Jetpack Compose (Android) / SwiftUI (iOS) | — | Minimal visual UI, needed for TalkBack/VoiceOver |
+| **Camera** | CameraX (Android) / AVFoundation (iOS) | — | Modern, lifecycle-aware, preview + capture |
+| **VLM (Vision)** | Qwen3-VL-2B via ONNX Runtime | ~800MB | Smallest Qwen VL, 32-lang OCR, 256K ctx, Apache 2.0 |
+| **STT** | Sherpa-ONNX + Whisper small | ~200MB | Cross-platform (Android+iOS), fully offline, Kotlin+Swift API |
+| **TTS** | Sherpa-ONNX + Piper voices | ~15MB | Cross-platform (Android+iOS), configurable speed, priority queue |
+| **Gestures** | GestureDetector / UIGestureRecognizer | — | Touch + accelerometer (shake) |
+| **Haptics** | VibrationEffect / UIImpactFeedbackGenerator | — | Predefined patterns per platform |
+| **Audio Cues** | AudioTrack / AVAudioEngine (PCM synthesis) | — | Sine wave tones, zero audio files shipped |
+| **Total on-device** | | **~1.0GB** | Fits comfortably on any modern phone |
 
-### Why Gemma 3n over Qwen-VL?
+### Why Qwen3-VL-2B?
 
-- Native Android `.task` bundle format (MediaPipe) — no custom inference code
-- Google's LiteRT runtime optimized for Android GPU/NPU/CPU
-- E4B variant: 4B effective params, runs on 3GB RAM with INT4
-- Proven on-device VLM with image Q&A, scene description, OCR built-in
-- Active community + Google support for edge deployment
+- **Apache 2.0** — fully open, no vendor can revoke your license
+- **2B params** — smallest in the Qwen3-VL family, ~800MB Q4 GGUF
+- **32-language OCR** — critical for reading signs, menus, labels worldwide
+- **256K context** — handles complex multi-turn conversations about scenes
+- Stays in the **Qwen family** (consistent with Atlas Cortex's Qwen3.5 stack)
+- ONNX Runtime available on both Android and iOS
 
-### Why Sherpa-ONNX over Android SpeechRecognizer?
+### Why Sherpa-ONNX for STT + TTS?
 
-- Android's built-in STT requires Google Play Services (many phones don't have it)
-- Sherpa-ONNX is truly offline — no hidden network calls
+- **Cross-platform** — same models, same API on Android (Kotlin) and iOS (Swift)
+- **Truly offline** — no Google Play Services, no Apple cloud, no hidden network calls
+- **Consistent experience** — identical voice quality on both platforms
 - Ships Whisper models (75MB-1.5GB, pick your quality/size tradeoff)
-- Also provides offline TTS (Piper) — single dependency for all speech
-- Kotlin API with AudioRecord integration examples
+- Piper TTS voices (~15MB each) with configurable speed
 - Wake word detection built-in
+- Open source (Apache 2.0)
 
 ---
 
 ## App Structure
+
+### Shared Core (Kotlin Multiplatform or mirrored logic)
+
+```
+core/
+├── SightEngine               # Main orchestrator (binds all subsystems)
+├── ModeManager               # 4-mode state machine + dispatcher
+├── Config                    # User preferences (speed, volume, verbosity)
+├── CommandParser              # 25+ voice intents, pattern matching
+├── ObstacleWarner             # Severity classification + directional warnings
+├── OrientationHelper          # Compass + landmark bookmarks
+├── ContextTracker             # Deduplication (Jaccard similarity)
+├── SessionHistory             # Rolling scene window, bookmarks
+├── AudioCueSynthesizer        # Sine wave tone generation (PCM)
+├── Models                     # Data classes: Scene, DetectedObject, Obstacle, etc.
+└── modes/
+    ├── ExploreMode            # Continuous scene narration
+    ├── ReadMode               # Text reading (signs, menus, labels)
+    ├── NavigateMode           # Obstacle scanning + compass
+    └── IdentifyMode           # Point-and-ask object identification
+```
+
+### Android (`android/`)
 
 ```
 dev.atlascortex.sight/
@@ -61,48 +92,38 @@ dev.atlascortex.sight/
 │   └── ui/
 │       ├── SightScreen.kt           # Minimal Compose UI (status + large buttons)
 │       └── theme/Theme.kt           # High contrast, large text
-│
-├── core/
-│   ├── SightEngine.kt               # Main orchestrator (binds all subsystems)
-│   ├── ModeManager.kt               # 4-mode state machine + dispatcher
-│   └── Config.kt                    # User preferences (speed, volume, verbosity)
-│
-├── vision/
+├── platform/
 │   ├── CameraManager.kt             # CameraX lifecycle, frame capture
-│   ├── VisionModel.kt               # Gemma 3n via MediaPipe inference
-│   ├── SceneDescriber.kt            # VLM prompting for scene descriptions
-│   ├── TextReader.kt                # VLM-based OCR
-│   └── ObjectDetector.kt            # VLM-based detection + distance estimation
-│
-├── voice/
+│   ├── VisionModel.kt               # Qwen3-VL-2B via ONNX Runtime
 │   ├── SpeechRecognizer.kt          # Sherpa-ONNX Whisper STT
 │   ├── SpeechSynthesizer.kt         # Sherpa-ONNX Piper TTS + priority queue
 │   ├── WakeWordDetector.kt          # "Hey Atlas" detection
-│   └── CommandParser.kt             # 25+ voice intents, pattern matching
-│
-├── interaction/
-│   ├── GestureHandler.kt            # 8 gesture types from touch + motion
-│   ├── HapticEngine.kt              # Vibration patterns (acknowledge/warn/danger)
-│   └── AudioCues.kt                 # Synthesized tones (beep/chime/warning/danger)
-│
-├── navigation/
-│   ├── ObstacleWarner.kt            # Severity classification + directional warnings
-│   └── OrientationHelper.kt         # Compass + landmark bookmarks
-│
-├── modes/
-│   ├── ExploreMode.kt               # Continuous scene narration
-│   ├── ReadMode.kt                  # Text reading (signs, menus, labels)
-│   ├── NavigateMode.kt              # Obstacle scanning + compass
-│   └── IdentifyMode.kt              # Point-and-ask object identification
-│
-├── data/
-│   ├── Models.kt                    # Data classes: Scene, DetectedObject, Obstacle, etc.
-│   ├── SessionHistory.kt            # Rolling scene window, bookmarks
-│   └── ContextTracker.kt            # Deduplication (Jaccard similarity)
-│
+│   ├── GestureHandler.kt            # GestureDetector + SensorManager
+│   ├── HapticEngine.kt              # VibrationEffect patterns
+│   └── Permissions.kt               # Camera + mic permission flow (voice-guided)
 └── util/
-    ├── ModelDownloader.kt           # First-run model download with voice progress
-    └── Permissions.kt               # Camera + microphone permission flow (voice-guided)
+    └── ModelDownloader.kt            # First-run model download with voice progress
+```
+
+### iOS (`ios/`) — v2
+
+```
+AtlasSight/
+├── App/
+│   ├── AtlasSightApp.swift           # App entry, model preloading
+│   ├── ContentView.swift             # Minimal SwiftUI (status + large buttons)
+│   └── Theme.swift                   # High contrast, large text
+├── Platform/
+│   ├── CameraManager.swift           # AVFoundation frame capture
+│   ├── VisionModel.swift             # Qwen3-VL-2B via ONNX Runtime
+│   ├── SpeechRecognizer.swift        # Sherpa-ONNX Whisper STT
+│   ├── SpeechSynthesizer.swift       # Sherpa-ONNX Piper TTS + priority queue
+│   ├── WakeWordDetector.swift        # "Hey Atlas" detection
+│   ├── GestureHandler.swift          # UIGestureRecognizer + CoreMotion
+│   ├── HapticEngine.swift            # UIImpactFeedbackGenerator patterns
+│   └── Permissions.swift             # Camera + mic permission flow (voice-guided)
+└── Util/
+    └── ModelDownloader.swift          # First-run model download with voice progress
 ```
 
 ---
@@ -215,13 +236,21 @@ All tones: 22,050 Hz sample rate, 16-bit PCM, 2ms fade-in/out.
 - Navigate mode (obstacle scanning + compass)
 - Identify mode (point-and-ask)
 
-### Phase 5: Polish + Distribution
+### Phase 5: iOS Port
+- Xcode project scaffolding (SwiftUI, same bundle ID)
+- Sherpa-ONNX Swift integration (STT + TTS — same models as Android)
+- Qwen3-VL-2B via ONNX Runtime for iOS
+- AVFoundation camera, CoreMotion gestures, UIImpactFeedbackGenerator haptics
+- Port all shared core logic (modes, commands, audio synthesis)
+- VoiceOver accessibility audit
+
+### Phase 6: Polish + Distribution
 - Context tracker (dedup repeated descriptions)
 - Session history + bookmarks
 - User preferences persistence
 - Orientation/compass integration
-- Play Store preparation (signing, listing, screenshots)
-- Accessibility audit (TalkBack end-to-end testing)
+- Play Store + App Store preparation (signing, listings, screenshots)
+- Accessibility audit (TalkBack + VoiceOver end-to-end testing)
 
 ---
 
@@ -240,12 +269,20 @@ All tones: 22,050 Hz sample rate, 16-bit PCM, 2ms fade-in/out.
 
 ## Hardware Requirements
 
+### Android
 - Android 13+ (API 33)
-- 6GB+ RAM (3GB for VLM, 200MB STT, 15MB TTS, OS overhead)
+- 4GB+ RAM (800MB VLM + 200MB STT + 15MB TTS + OS overhead)
 - Camera (rear preferred, front fallback)
 - Microphone
-- ~2GB storage for models
+- ~1.5GB storage for models
 - GPS + compass (optional, enhances navigation)
+
+### iOS (v2)
+- iOS 16+
+- iPhone 12 or newer (A14+ for ONNX Runtime performance)
+- Camera, microphone
+- ~1.5GB storage for models
+- Same GPS/compass optional enhancements
 
 ---
 
@@ -253,13 +290,13 @@ All tones: 22,050 Hz sample rate, 16-bit PCM, 2ms fade-in/out.
 
 On first launch:
 1. Speak: "Welcome to Atlas Sight. Downloading AI models. This only happens once."
-2. Download Gemma 3n E4B `.task` bundle (~1.5GB) with voice progress every 25%
+2. Download Qwen3-VL-2B Q4 GGUF (~800MB) with voice progress every 25%
 3. Download Sherpa-ONNX Whisper small model (~200MB)
 4. Download Piper TTS voice (~15MB)
 5. Speak: "Atlas Sight is ready. Double-tap or say Hey Atlas to begin."
 
 Models stored in app-private storage. Re-download button in settings if corrupted.
-Total first-download: ~1.7GB (one-time, cached forever).
+Total first-download: ~1.0GB (one-time, cached forever).
 
 ---
 
