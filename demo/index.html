@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>Atlas Sight</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Camera viewfinder — full screen background */
+#camera-view {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  z-index: 1;
+  opacity: 0.3;
+}
+
+/* Hidden canvas for frame capture */
+#capture-canvas { display: none; }
+
+/* Overlay on top of camera */
+#overlay {
+  position: fixed; inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px;
+  pointer-events: none;
+}
+
+/* Status indicator dot */
+#status-dot {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #4caf50;
+  box-shadow: 0 0 12px #4caf50;
+  transition: background 0.3s, box-shadow 0.3s;
+  margin-top: 40px;
+}
+#status-dot.error {
+  background: #f44336;
+  box-shadow: 0 0 12px #f44336;
+}
+#status-dot.busy {
+  background: #ff9800;
+  box-shadow: 0 0 12px #ff9800;
+  animation: pulse 1s infinite;
+}
+#status-dot.listening {
+  background: #2196f3;
+  box-shadow: 0 0 20px #2196f3;
+  animation: pulse 0.6s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
+
+/* Status text */
+#status-text {
+  font-size: 16px;
+  color: rgba(255,255,255,0.7);
+  text-align: center;
+  margin-top: 8px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+}
+
+/* Main content area */
+#content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px;
+}
+
+#description-text {
+  font-size: 20px;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.9);
+  text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+  max-width: 90%;
+}
+
+/* Mode indicator */
+#mode-badge {
+  font-size: 14px;
+  color: rgba(255,255,255,0.5);
+  padding: 8px 16px;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 20px;
+  margin-bottom: 40px;
+}
+
+/* Touch area — covers entire screen for gestures */
+#touch-area {
+  position: fixed; inset: 0;
+  z-index: 20;
+  pointer-events: auto;
+}
+
+/* Flash effect on capture */
+#flash {
+  position: fixed; inset: 0;
+  z-index: 30;
+  background: rgba(255,255,255,0.8);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+}
+#flash.active {
+  opacity: 1;
+  transition: none;
+}
+
+/* Accessibility — live region */
+#sr-announce {
+  position: absolute;
+  left: -9999px;
+  width: 1px; height: 1px;
+  overflow: hidden;
+}
+
+/* Speed controls — bottom right, subtle */
+#speed-controls {
+  position: fixed;
+  bottom: 16px; right: 16px;
+  z-index: 25;
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+#speed-controls button {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+</style>
+</head>
+<body>
+
+<video id="camera-view" autoplay playsinline muted></video>
+<canvas id="capture-canvas"></canvas>
+
+<div id="overlay">
+  <div>
+    <div id="status-dot"></div>
+    <div id="status-text">Initializing…</div>
+  </div>
+  <div id="content">
+    <div id="description-text" aria-live="assertive"></div>
+  </div>
+  <div id="mode-badge">Atlas Sight</div>
+</div>
+
+<div id="touch-area" role="application" aria-label="Atlas Sight. Double tap to describe scene. Long press to ask a question."></div>
+<div id="flash"></div>
+<div id="sr-announce" aria-live="assertive" role="status"></div>
+
+<div id="speed-controls">
+  <button id="btn-slower" aria-label="Slower speech">−</button>
+  <button id="btn-faster" aria-label="Faster speech">+</button>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  // -----------------------------------------------------------------------
+  // State
+  // -----------------------------------------------------------------------
+  const state = {
+    cameraReady: false,
+    busy: false,
+    lastDescription: '',
+    lastImageContext: '',
+    mode: 'describe',      // describe | read_text | emergency
+    speechRate: 1.0,
+    touchStart: null,       // {x, y, time}
+    longPressTimer: null,
+    listening: false,
+  };
+
+  // DOM refs
+  const video        = document.getElementById('camera-view');
+  const canvas       = document.getElementById('capture-canvas');
+  const statusDot    = document.getElementById('status-dot');
+  const statusText   = document.getElementById('status-text');
+  const descText     = document.getElementById('description-text');
+  const modeBadge    = document.getElementById('mode-badge');
+  const touchArea    = document.getElementById('touch-area');
+  const flash        = document.getElementById('flash');
+  const srAnnounce   = document.getElementById('sr-announce');
+  const btnSlower    = document.getElementById('btn-slower');
+  const btnFaster    = document.getElementById('btn-faster');
+
+  // -----------------------------------------------------------------------
+  // Audio feedback (oscillator beeps — no files needed)
+  // -----------------------------------------------------------------------
+  let audioCtx = null;
+
+  function ensureAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
+  function playTone(freq, duration, type = 'sine', volume = 0.3) {
+    try {
+      const ctx = ensureAudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      gain.gain.value = volume;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+      osc.stop(ctx.currentTime + duration);
+    } catch (e) { /* audio not available */ }
+  }
+
+  function beepCapture()  { playTone(880, 0.1, 'sine', 0.4); }
+  function chimeReady()   { playTone(660, 0.15); setTimeout(() => playTone(880, 0.15), 160); setTimeout(() => playTone(1100, 0.2), 320); }
+  function errorTone()    { playTone(220, 0.3, 'sawtooth', 0.3); }
+  function beepListen()   { playTone(1200, 0.08); setTimeout(() => playTone(1500, 0.08), 100); }
+  function beepStopListen() { playTone(1500, 0.08); setTimeout(() => playTone(1200, 0.08), 100); }
+
+  // -----------------------------------------------------------------------
+  // Haptic feedback
+  // -----------------------------------------------------------------------
+  function vibrate(pattern) {
+    if (navigator.vibrate) navigator.vibrate(pattern);
+  }
+
+  // -----------------------------------------------------------------------
+  // Screen reader announcement
+  // -----------------------------------------------------------------------
+  function announce(text) {
+    srAnnounce.textContent = '';
+    setTimeout(() => { srAnnounce.textContent = text; }, 50);
+  }
+
+  // -----------------------------------------------------------------------
+  // TTS — Web Speech API
+  // -----------------------------------------------------------------------
+  function speak(text, onEnd) {
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = 'en-US';
+    utter.rate = state.speechRate;
+    utter.pitch = 1.0;
+    utter.volume = 1.0;
+    if (onEnd) utter.onend = onEnd;
+    utter.onerror = (e) => { if (onEnd) onEnd(); };
+    window.speechSynthesis.speak(utter);
+    announce(text);
+  }
+
+  function stopSpeech() {
+    window.speechSynthesis.cancel();
+  }
+
+  // -----------------------------------------------------------------------
+  // STT — Web Speech API
+  // -----------------------------------------------------------------------
+  let recognition = null;
+
+  function initSTT() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return null;
+
+    recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setStatus('ready', `Heard: "${transcript}"`);
+      beepStopListen();
+      state.listening = false;
+      handleVoiceQuestion(transcript);
+    };
+
+    recognition.onerror = (event) => {
+      state.listening = false;
+      if (event.error === 'no-speech') {
+        setStatus('ready', 'No speech detected. Try again.');
+        speak('I didn\'t hear anything. Try again.');
+      } else if (event.error !== 'aborted') {
+        setStatus('error', `Speech error: ${event.error}`);
+        errorTone();
+      }
+    };
+
+    recognition.onend = () => {
+      state.listening = false;
+      statusDot.classList.remove('listening');
+    };
+
+    return recognition;
+  }
+
+  function startListening() {
+    if (!recognition) {
+      speak('Voice input is not supported on this device.');
+      return;
+    }
+    if (state.listening) return;
+
+    stopSpeech();
+    state.listening = true;
+    beepListen();
+    vibrate(50);
+    setStatus('listening', 'Listening… speak now');
+    speak('Listening', () => {
+      try {
+        recognition.start();
+      } catch (e) {
+        state.listening = false;
+        setStatus('error', 'Could not start microphone');
+      }
+    });
+  }
+
+  function stopListening() {
+    if (recognition && state.listening) {
+      recognition.stop();
+      state.listening = false;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Status UI
+  // -----------------------------------------------------------------------
+  function setStatus(type, text) {
+    statusDot.className = '';
+    if (type === 'error') statusDot.classList.add('error');
+    else if (type === 'busy') statusDot.classList.add('busy');
+    else if (type === 'listening') statusDot.classList.add('listening');
+    statusText.textContent = text || '';
+  }
+
+  function setMode(mode) {
+    state.mode = mode;
+    const labels = { describe: 'Scene Description', read_text: 'Read Text', emergency: 'Where Am I?' };
+    modeBadge.textContent = labels[mode] || 'Atlas Sight';
+  }
+
+  // -----------------------------------------------------------------------
+  // Camera
+  // -----------------------------------------------------------------------
+  async function initCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+      state.cameraReady = true;
+      setStatus('ready', 'Ready — double-tap to describe');
+      return true;
+    } catch (err) {
+      setStatus('error', 'Camera access denied');
+      speak('Camera access is needed. Please allow camera permissions and reload.');
+      return false;
+    }
+  }
+
+  function captureFrame() {
+    if (!state.cameraReady) return null;
+
+    canvas.width = 640;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d');
+
+    // Fit video into canvas maintaining aspect ratio
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const scale = Math.min(640 / vw, 480 / vh);
+    const sw = vw * scale;
+    const sh = vh * scale;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, 640, 480);
+    ctx.drawImage(video, (640 - sw) / 2, (480 - sh) / 2, sw, sh);
+
+    return canvas.toDataURL('image/jpeg', 0.7);
+  }
+
+  // Flash effect
+  function flashScreen() {
+    flash.classList.add('active');
+    setTimeout(() => flash.classList.remove('active'), 100);
+  }
+
+  // -----------------------------------------------------------------------
+  // Server communication
+  // -----------------------------------------------------------------------
+  const API_BASE = window.location.origin;
+
+  async function describeImage(imageDataUrl, mode) {
+    const resp = await fetch(`${API_BASE}/describe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageDataUrl, mode: mode || 'describe' }),
+    });
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    return resp.json();
+  }
+
+  async function askQuestion(question, imageContext) {
+    const resp = await fetch(`${API_BASE}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, image_context: imageContext }),
+    });
+    if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+    return resp.json();
+  }
+
+  // -----------------------------------------------------------------------
+  // Actions
+  // -----------------------------------------------------------------------
+  async function doCapture() {
+    if (state.busy) return;
+    state.busy = true;
+
+    beepCapture();
+    flashScreen();
+    vibrate(100);
+    setStatus('busy', 'Capturing…');
+
+    const imageData = captureFrame();
+    if (!imageData) {
+      setStatus('error', 'Camera not ready');
+      speak('Camera is not ready yet.');
+      state.busy = false;
+      return;
+    }
+
+    setStatus('busy', 'Analyzing…');
+    speak('Analyzing image');
+
+    try {
+      const result = await describeImage(imageData, state.mode);
+      const desc = result.description;
+      state.lastDescription = desc;
+      state.lastImageContext = desc;
+      descText.textContent = desc;
+      chimeReady();
+      vibrate([50, 50, 50]);
+      setStatus('ready', 'Done — double-tap for new capture');
+      speak(desc);
+    } catch (err) {
+      errorTone();
+      vibrate([200, 100, 200]);
+      setStatus('error', 'Failed to get description');
+      speak('Sorry, I could not analyze the image. Please try again.');
+      descText.textContent = '';
+    }
+
+    state.busy = false;
+  }
+
+  async function handleVoiceQuestion(question) {
+    if (state.busy) return;
+    state.busy = true;
+
+    setStatus('busy', 'Thinking…');
+
+    try {
+      const result = await askQuestion(question, state.lastImageContext);
+      const answer = result.answer;
+      state.lastDescription = answer;
+      descText.textContent = answer;
+      chimeReady();
+      setStatus('ready', 'Ready');
+      speak(answer);
+    } catch (err) {
+      errorTone();
+      setStatus('error', 'Could not get answer');
+      speak('Sorry, I could not answer that. Please try again.');
+    }
+
+    state.busy = false;
+  }
+
+  function repeatLast() {
+    if (state.lastDescription) {
+      vibrate(50);
+      speak(state.lastDescription);
+    } else {
+      speak('Nothing to repeat yet. Double-tap to capture a scene first.');
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Gesture handling
+  // -----------------------------------------------------------------------
+  let lastTapTime = 0;
+  let tapCount = 0;
+  let tapTimer = null;
+  const DOUBLE_TAP_DELAY = 350;
+  const LONG_PRESS_DELAY = 600;
+  const SWIPE_THRESHOLD = 80;
+
+  touchArea.addEventListener('touchstart', (e) => {
+    // Don't intercept if touching speed controls
+    if (e.target.closest('#speed-controls')) return;
+
+    const touch = e.touches[0];
+    state.touchStart = {
+      x: touch.clientX,
+      y: touch.clientY,
+      time: Date.now(),
+    };
+
+    // Start long press timer
+    state.longPressTimer = setTimeout(() => {
+      state.longPressTimer = null;
+      startListening();
+    }, LONG_PRESS_DELAY);
+  }, { passive: true });
+
+  touchArea.addEventListener('touchmove', (e) => {
+    // Cancel long press on move
+    if (state.longPressTimer) {
+      const touch = e.touches[0];
+      const dx = Math.abs(touch.clientX - state.touchStart.x);
+      const dy = Math.abs(touch.clientY - state.touchStart.y);
+      if (dx > 15 || dy > 15) {
+        clearTimeout(state.longPressTimer);
+        state.longPressTimer = null;
+      }
+    }
+  }, { passive: true });
+
+  touchArea.addEventListener('touchend', (e) => {
+    if (!state.touchStart) return;
+    const now = Date.now();
+    const dt = now - state.touchStart.time;
+
+    // Clear long press timer
+    if (state.longPressTimer) {
+      clearTimeout(state.longPressTimer);
+      state.longPressTimer = null;
+    }
+
+    // If listening, touchend stops listening
+    if (state.listening) {
+      stopListening();
+      return;
+    }
+
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - state.touchStart.x;
+    const dy = touch.clientY - state.touchStart.y;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+
+    // Swipe detection (must be quick and directional)
+    if (dt < 500 && absDx > SWIPE_THRESHOLD && absDx > absDy * 1.5) {
+      if (dx > 0) {
+        // Swipe right → read text mode
+        setMode('read_text');
+        vibrate(50);
+        speak('Read text mode. Double-tap to read text in view.');
+      } else {
+        // Swipe left → repeat last
+        repeatLast();
+      }
+      state.touchStart = null;
+      return;
+    }
+
+    // If it was a long press (>600ms), we already started listening
+    if (dt >= LONG_PRESS_DELAY) {
+      state.touchStart = null;
+      return;
+    }
+
+    // Tap detection — double tap
+    tapCount++;
+    if (tapCount === 1) {
+      tapTimer = setTimeout(() => {
+        // Single tap — give a hint
+        tapCount = 0;
+      }, DOUBLE_TAP_DELAY);
+    } else if (tapCount >= 2) {
+      clearTimeout(tapTimer);
+      tapCount = 0;
+      doCapture();
+    }
+
+    state.touchStart = null;
+  }, { passive: true });
+
+  // -----------------------------------------------------------------------
+  // Shake detection (for "where am I?" emergency mode)
+  // -----------------------------------------------------------------------
+  let lastShake = 0;
+  const SHAKE_THRESHOLD = 30;
+
+  if (window.DeviceMotionEvent) {
+    window.addEventListener('devicemotion', (e) => {
+      const acc = e.accelerationIncludingGravity;
+      if (!acc) return;
+      const total = Math.abs(acc.x) + Math.abs(acc.y) + Math.abs(acc.z);
+      if (total > SHAKE_THRESHOLD) {
+        const now = Date.now();
+        if (now - lastShake > 3000) { // 3s cooldown
+          lastShake = now;
+          setMode('emergency');
+          vibrate([100, 50, 100, 50, 100]);
+          speak('Emergency mode. Capturing surroundings.', () => doCapture());
+        }
+      }
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Speed controls
+  // -----------------------------------------------------------------------
+  btnSlower.addEventListener('click', (e) => {
+    e.stopPropagation();
+    state.speechRate = Math.max(0.5, state.speechRate - 0.25);
+    vibrate(30);
+    speak(`Speed ${state.speechRate.toFixed(2)}`);
+  });
+
+  btnFaster.addEventListener('click', (e) => {
+    e.stopPropagation();
+    state.speechRate = Math.min(2.5, state.speechRate + 0.25);
+    vibrate(30);
+    speak(`Speed ${state.speechRate.toFixed(2)}`);
+  });
+
+  // Prevent speed buttons from triggering touch-area gestures
+  document.getElementById('speed-controls').addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+  document.getElementById('speed-controls').addEventListener('touchend', (e) => e.stopPropagation(), { passive: true });
+
+  // -----------------------------------------------------------------------
+  // Init
+  // -----------------------------------------------------------------------
+  async function init() {
+    setStatus('busy', 'Starting…');
+    initSTT();
+
+    const camOk = await initCamera();
+    if (!camOk) return;
+
+    // Quick health check
+    try {
+      const resp = await fetch(`${API_BASE}/health`);
+      const data = await resp.json();
+      if (data.llama_server && !data.llama_server.connected) {
+        setStatus('ready', 'Ready (LLM offline — demo mode)');
+      }
+    } catch (e) {
+      // Server might not be reachable for health check yet
+    }
+
+    // Welcome message
+    speak(
+      'Atlas Sight ready. ' +
+      'Double-tap anywhere to describe what you see. ' +
+      'Long press to ask a question. ' +
+      'Swipe right for text reading mode. ' +
+      'Swipe left to repeat.'
+    );
+  }
+
+  // Start on load
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    init();
+  } else {
+    window.addEventListener('DOMContentLoaded', init);
+  }
+
+  // Keep speech synthesis alive on mobile (Chrome pauses it)
+  setInterval(() => {
+    if (window.speechSynthesis.speaking) return;
+    // Tiny silent utterance to keep the synthesis engine warm
+    const keepAlive = new SpeechSynthesisUtterance('');
+    keepAlive.volume = 0;
+    window.speechSynthesis.speak(keepAlive);
+  }, 10000);
+
+})();
+</script>
+</body>
+</html>
