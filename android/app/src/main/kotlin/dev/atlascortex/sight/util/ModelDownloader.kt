@@ -53,11 +53,19 @@ class ModelDownloader(private val context: Context) {
     private val models = listOf(
         ModelInfo(
             name = "qwen3-vl",
-            displayName = "Vision AI",
-            url = "https://huggingface.co/unsloth/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3-VL-2B-Instruct-Q4_K_M.gguf",
+            displayName = "Vision AI text model",
+            url = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
             targetDir = "models/qwen3-vl",
             targetFile = "Qwen3-VL-2B-Instruct-Q4_K_M.gguf",
             sizeDescription = "1.1 gigabytes",
+        ),
+        ModelInfo(
+            name = "qwen3-vl-mmproj",
+            displayName = "Vision AI eye module",
+            url = "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
+            targetDir = "models/qwen3-vl",
+            targetFile = "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf",
+            sizeDescription = "445 megabytes",
         ),
         ModelInfo(
             name = "whisper-stt",
@@ -65,7 +73,7 @@ class ModelDownloader(private val context: Context) {
             url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2",
             targetDir = "models/whisper-stt",
             targetFile = "sherpa-onnx-whisper-tiny.en.tar.bz2",
-            sizeDescription = "40 megabytes",
+            sizeDescription = "118 megabytes",
             isTarball = true,
         ),
         ModelInfo(
@@ -103,7 +111,7 @@ class ModelDownloader(private val context: Context) {
 
     fun allModelsReady(): Boolean = getModelStatus().values.all { it }
 
-    fun getTotalSizeDescription(): String = "about 1.2 gigabytes"
+    fun getTotalSizeDescription(): String = "about 1.8 gigabytes"
 
     suspend fun downloadMissingModels(
         onAnnounce: (String) -> Unit,

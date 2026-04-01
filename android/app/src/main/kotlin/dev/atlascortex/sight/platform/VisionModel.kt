@@ -23,19 +23,23 @@ class VisionModel(private val context: Context) {
     suspend fun load(): Boolean = withContext(Dispatchers.IO) {
         try {
             val modelFile = File(modelDir, "Qwen3-VL-2B-Instruct-Q4_K_M.gguf")
+            val mmprojFile = File(modelDir, "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf")
             if (!modelFile.exists()) {
-                android.util.Log.e("VisionModel", "Model file not found: ${modelFile.absolutePath}")
+                android.util.Log.e("VisionModel", "LLM model not found: ${modelFile.absolutePath}")
                 return@withContext false
             }
-            android.util.Log.i("VisionModel", "Model file found: ${modelFile.length() / 1_000_000}MB")
+            if (!mmprojFile.exists()) {
+                android.util.Log.e("VisionModel", "Vision encoder not found: ${mmprojFile.absolutePath}")
+                return@withContext false
+            }
+            android.util.Log.i("VisionModel", "LLM: ${modelFile.length() / 1_000_000}MB, mmproj: ${mmprojFile.length() / 1_000_000}MB")
 
             val nativeLibDir = context.applicationInfo.nativeLibraryDir
-            android.util.Log.i("VisionModel", "Initializing native engine from: $nativeLibDir")
             engine.init(nativeLibDir)
 
             val nThreads = (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4)
             android.util.Log.i("VisionModel", "Loading model with $nThreads threads...")
-            isLoaded = engine.loadModel(modelFile.absolutePath, nThreads)
+            isLoaded = engine.loadModel(modelFile.absolutePath, mmprojFile.absolutePath, nThreads)
             android.util.Log.i("VisionModel", "Model load result: $isLoaded")
             isLoaded
         } catch (e: Exception) {

@@ -91,12 +91,15 @@ Java_dev_atlascortex_sight_vlm_VisionInferenceEngine_nativeInit(
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_atlascortex_sight_vlm_VisionInferenceEngine_nativeLoadModel(
-        JNIEnv * env, jobject /*unused*/, jstring jModelPath, jint nThreads) {
+        JNIEnv * env, jobject /*unused*/, jstring jModelPath,
+        jstring jMmprojPath, jint nThreads) {
 
     g_n_threads = (nThreads > 0) ? (int)nThreads : 4;
 
-    const char * modelPath = env->GetStringUTFChars(jModelPath, nullptr);
-    LOGi("Loading model from %s  (threads=%d)", modelPath, g_n_threads);
+    const char * modelPath  = env->GetStringUTFChars(jModelPath, nullptr);
+    const char * mmprojPath = env->GetStringUTFChars(jMmprojPath, nullptr);
+    LOGi("Loading model from %s  mmproj from %s  (threads=%d)",
+         modelPath, mmprojPath, g_n_threads);
 
     // --- Load text model ---------------------------------------------------
     llama_model_params mparams = llama_model_default_params();
@@ -104,6 +107,7 @@ Java_dev_atlascortex_sight_vlm_VisionInferenceEngine_nativeLoadModel(
     if (!g_model) {
         LOGe("Failed to load llama model");
         env->ReleaseStringUTFChars(jModelPath, modelPath);
+        env->ReleaseStringUTFChars(jMmprojPath, mmprojPath);
         return JNI_FALSE;
     }
 
@@ -120,19 +124,20 @@ Java_dev_atlascortex_sight_vlm_VisionInferenceEngine_nativeLoadModel(
         LOGe("Failed to create llama context");
         llama_model_free(g_model); g_model = nullptr;
         env->ReleaseStringUTFChars(jModelPath, modelPath);
+        env->ReleaseStringUTFChars(jMmprojPath, mmprojPath);
         return JNI_FALSE;
     }
 
-    // --- Create multimodal (vision) context --------------------------------
-    //  For Qwen3-VL unified GGUF the same file contains both LLM and mmproj.
+    // --- Create multimodal (vision) context from mmproj --------------------
     mtmd_context_params mctx = mtmd_context_params_default();
     mctx.use_gpu       = false;   // CPU-only on most Android devices
     mctx.print_timings = true;
     mctx.n_threads     = g_n_threads;
     mctx.warmup        = false;   // skip warmup to speed up load
 
-    g_mtmd_ctx = mtmd_init_from_file(modelPath, g_model, mctx);
+    g_mtmd_ctx = mtmd_init_from_file(mmprojPath, g_model, mctx);
     env->ReleaseStringUTFChars(jModelPath, modelPath);
+    env->ReleaseStringUTFChars(jMmprojPath, mmprojPath);
 
     if (!g_mtmd_ctx) {
         LOGe("Failed to create mtmd context — vision disabled");

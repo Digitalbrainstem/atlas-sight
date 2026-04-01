@@ -23,7 +23,7 @@ class VisionInferenceEngine {
     // ---- Native methods (implemented in vision_chat.cpp) ------------------
 
     private external fun nativeInit(nativeLibDir: String)
-    private external fun nativeLoadModel(modelPath: String, nThreads: Int): Boolean
+    private external fun nativeLoadModel(modelPath: String, mmprojPath: String, nThreads: Int): Boolean
     private external fun nativeInfer(jpegBytes: ByteArray, prompt: String, maxTokens: Int): String
     private external fun nativeRelease()
 
@@ -38,13 +38,14 @@ class VisionInferenceEngine {
     }
 
     /**
-     * Load a GGUF model with embedded vision encoder.
-     * @param modelPath absolute path to the .gguf file on device storage.
-     * @param nThreads  number of CPU threads for inference (2–4 recommended).
-     * @return true if the model (and its vision encoder) loaded successfully.
+     * Load a GGUF model + separate vision encoder (mmproj).
+     * @param modelPath   absolute path to the LLM .gguf file.
+     * @param mmprojPath  absolute path to the mmproj .gguf file (vision encoder).
+     * @param nThreads    number of CPU threads for inference (2–4 recommended).
+     * @return true if both the LLM and vision encoder loaded successfully.
      */
-    fun loadModel(modelPath: String, nThreads: Int = 4): Boolean {
-        modelLoaded = nativeLoadModel(modelPath, nThreads)
+    fun loadModel(modelPath: String, mmprojPath: String, nThreads: Int = 4): Boolean {
+        modelLoaded = nativeLoadModel(modelPath, mmprojPath, nThreads)
         return modelLoaded
     }
 
