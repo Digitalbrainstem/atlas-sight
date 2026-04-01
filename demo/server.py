@@ -1,7 +1,8 @@
 """Atlas Sight — Demo Server.
 
-FastAPI server that serves the phone UI and proxies vision requests
-to llama-server running on Overwatch.
+FastAPI server that serves the phone UI and proxies between the
+browser and local llama-server / whisper-server running in Termux.
+Designed for 100% offline operation on a Pixel 9.
 """
 from __future__ import annotations
 
@@ -22,10 +23,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 logger = logging.getLogger("atlas-sight")
 
-LLAMA_HOST = os.getenv("LLAMA_HOST", "192.168.3.8")
+LLAMA_HOST = os.getenv("LLAMA_HOST", "127.0.0.1")
 LLAMA_PORT = os.getenv("LLAMA_PORT", "8080")
 LLAMA_URL = f"http://{LLAMA_HOST}:{LLAMA_PORT}"
-WHISPER_HOST = os.getenv("WHISPER_HOST", "192.168.3.8")
+WHISPER_HOST = os.getenv("WHISPER_HOST", "127.0.0.1")
 WHISPER_PORT = os.getenv("WHISPER_PORT", "10300")
 WHISPER_URL = f"http://{WHISPER_HOST}:{WHISPER_PORT}"
 SIGHT_PORT = int(os.getenv("SIGHT_PORT", "5200"))
@@ -40,7 +41,7 @@ async def lifespan(application: FastAPI):
         await _client.aclose()
 
 
-app = FastAPI(title="Atlas Sight Demo", lifespan=lifespan)
+app = FastAPI(title="Atlas Sight", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,16 +50,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Shared httpx client for llama-server communication
 _client: httpx.AsyncClient | None = None
 
 
 async def get_client() -> httpx.AsyncClient:
     global _client
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=60.0)
+        _client = httpx.AsyncClient(timeout=120.0)
     return _client
 
+
+# ---------------------------------------------------------------------------
+# Qwen3 think-tag stripping
+# ---------------------------------------------------------------------------
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
@@ -68,13 +72,12 @@ def _strip_think(text: str) -> str:
     if "<think>" not in text:
         return text
 
-    # Case 1: Closed think blocks — <think>...</think>actual answer
+    # Closed think blocks: <think>...</think>actual answer
     cleaned = _THINK_RE.sub("", text).strip()
     if cleaned and "<think>" not in cleaned:
         return cleaned
 
-    # Case 2: Unclosed think block — model used all tokens thinking.
-    # Extract any content after the last complete thought.
+    # Unclosed think block — model ran out of tokens mid-thought.
     inner = text
     if inner.startswith("<think>"):
         inner = inner[7:]
@@ -86,11 +89,9 @@ def _strip_think(text: str) -> str:
     content_lines = []
     for line in reversed(lines):
         stripped = line.strip().lstrip("*-•0123456789.) ")
-        # Skip short/empty lines
         if not stripped or len(stripped) < 15:
             continue
         lower = stripped.lower()
-        # Skip meta/planning lines
         skip_prefixes = (
             "thinking", "analyz", "determin", "constraint", "task:",
             "input", "role:", "check", "critique", "draft", "revised",
@@ -101,16 +102,12 @@ def _strip_think(text: str) -> str:
         )
         if any(lower.startswith(s) for s in skip_prefixes):
             continue
-        # Skip lines with heavy markdown formatting or labels
         if stripped.startswith("**") or stripped.endswith(":**"):
             continue
-        # Skip lines that reference prompt mechanics
         if "preamble" in lower or "persona" in lower or "constraint" in lower:
             continue
-        # Skip lines with quote marks wrapping (drafts)
         if stripped.startswith('"') and stripped.endswith('"'):
             continue
-        # Skip lines with parenthetical annotations like "(1 sentence)"
         if re.search(r'\(\d+ sentence', stripped):
             continue
         content_lines.insert(0, stripped)
@@ -122,8 +119,12 @@ def _strip_think(text: str) -> str:
     return "I received your request but need a moment. Please try again."
 
 
+# ---------------------------------------------------------------------------
+# LLM communication
+# ---------------------------------------------------------------------------
+
 async def llm_generate(prompt: str, max_tokens: int = 512) -> str:
-    """Send a prompt to llama-server and return the completion text."""
+    """Send a prompt to local llama-server and return the completion."""
     client = await get_client()
     try:
         resp = await client.post(
@@ -132,9 +133,7 @@ async def llm_generate(prompt: str, max_tokens: int = 512) -> str:
                 "messages": [
                     {
                         "role": "system",
-                        "content": (
-                            "Respond directly and concisely. No preamble."
-                        ),
+                        "content": "Respond directly and concisely. No preamble.",
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -150,7 +149,7 @@ async def llm_generate(prompt: str, max_tokens: int = 512) -> str:
     except httpx.ConnectError:
         raise HTTPException(
             status_code=502,
-            detail=f"Cannot reach llama-server at {LLAMA_URL}",
+            detail=f"Cannot reach llama-server at {LLAMA_URL}. Is it running?",
         )
     except Exception as exc:
         logger.exception("LLM generate failed")
@@ -172,16 +171,14 @@ async def index():
 async def describe(request: Request):
     """Receive a base64-encoded image and return a scene description.
 
-    For now (no VLM), we ask the LLM to generate a helpful response
-    acknowledging we're in demo mode. When a real VLM is connected,
-    this endpoint swaps in actual image understanding.
+    Currently uses the LLM to generate contextual demo responses.
+    When a VLM model is loaded, this swaps to real image understanding.
     """
     body = await request.json()
     image_b64: str = body.get("image", "")
     context: str = body.get("context", "general")
     mode: str = body.get("mode", "describe")
 
-    # Validate we actually received image data
     if not image_b64:
         raise HTTPException(status_code=400, detail="No image data provided")
 
@@ -189,37 +186,32 @@ async def describe(request: Request):
     if "," in image_b64:
         image_b64 = image_b64.split(",", 1)[1]
 
-    # Calculate approximate image size for context
     image_bytes = len(base64.b64decode(image_b64))
     image_kb = image_bytes / 1024
 
     if mode == "read_text":
         prompt = (
             "You are Atlas Sight, an AI assistant helping a visually impaired person. "
-            "The user just pointed their phone camera at something and asked you to "
-            "read any text visible. This is a DEMO without real vision — acknowledge "
-            "that you received their camera frame and explain that real text reading "
-            "will work once the vision model is connected. Be warm, brief, and helpful. "
-            "Suggest they try pointing at a sign, label, or document."
+            "The user pointed their phone camera at something and asked you to read text. "
+            "This is a demo without real vision — acknowledge their request and explain that "
+            "real text reading will work once the vision model is connected. "
+            "Be warm, brief (2 sentences max)."
         )
     elif mode == "emergency":
         prompt = (
             "You are Atlas Sight, an AI assistant helping a visually impaired person. "
-            "The user triggered the 'where am I?' emergency mode. This is a DEMO without "
-            "real vision — acknowledge the emergency request and explain that with real "
-            "vision, you would describe their surroundings, identify landmarks, read signs, "
-            "and help them orient themselves. Be reassuring, calm, and brief."
+            "The user triggered 'where am I?' emergency mode. This is a demo — acknowledge "
+            "the request and explain that with real vision you would describe surroundings, "
+            "identify landmarks, and help them orient. Be reassuring and brief (2 sentences)."
         )
     else:
         prompt = (
             "You are Atlas Sight, an AI assistant helping a visually impaired person. "
-            "The user just captured an image with their phone camera. "
-            f"Image received: {image_kb:.0f} KB, context: {context}. "
-            "This is a DEMO — real vision is not yet connected, but the camera capture "
-            "pipeline is working. Acknowledge you received the image and briefly describe "
-            "what you WOULD do with real vision: identify objects, read text, describe "
-            "people, detect obstacles, read labels, describe spatial layout. "
-            "Be warm, concise (2-3 sentences max), and encouraging."
+            f"The user captured an image ({image_kb:.0f} KB). "
+            "This is a demo — real vision is not yet connected but the camera pipeline works. "
+            "Acknowledge the image and briefly describe what you WOULD do with real vision: "
+            "identify objects, read text, detect obstacles, describe spatial layout. "
+            "Be warm and concise (2-3 sentences max)."
         )
 
     description = await llm_generate(prompt, max_tokens=1500)
@@ -254,10 +246,10 @@ async def ask(request: Request):
 
 @app.post("/transcribe")
 async def transcribe(request: Request):
-    """Receive audio from the phone and proxy to Whisper for transcription.
+    """Receive audio from the browser and proxy to local Whisper for STT.
 
     Accepts raw audio blob (webm/opus from MediaRecorder).
-    Whisper's --convert flag handles format conversion automatically.
+    Whisper's --convert flag handles format conversion.
     """
     content_type = request.headers.get("content-type", "")
     audio_bytes = await request.body()
@@ -265,19 +257,14 @@ async def transcribe(request: Request):
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="No audio data provided")
 
-    # Determine filename/content-type for the upload
     if "webm" in content_type:
-        filename = "audio.webm"
-        ct = "audio/webm"
+        filename, ct = "audio.webm", "audio/webm"
     elif "ogg" in content_type:
-        filename = "audio.ogg"
-        ct = "audio/ogg"
+        filename, ct = "audio.ogg", "audio/ogg"
     elif "wav" in content_type:
-        filename = "audio.wav"
-        ct = "audio/wav"
+        filename, ct = "audio.wav", "audio/wav"
     else:
-        filename = "audio.webm"
-        ct = "audio/webm"
+        filename, ct = "audio.webm", "audio/webm"
 
     client = await get_client()
     try:
@@ -299,7 +286,7 @@ async def transcribe(request: Request):
     except httpx.ConnectError:
         raise HTTPException(
             status_code=502,
-            detail=f"Cannot reach Whisper server at {WHISPER_URL}",
+            detail=f"Cannot reach Whisper at {WHISPER_URL}. Is it running?",
         )
     except Exception as exc:
         logger.exception("Whisper transcription failed")
@@ -308,7 +295,7 @@ async def transcribe(request: Request):
 
 @app.get("/health")
 async def health():
-    """Check server health and backend connectivity."""
+    """Check all local services."""
     client = await get_client()
 
     llama_ok = False
@@ -318,7 +305,7 @@ async def health():
         llama_ok = resp.status_code == 200
         llama_detail = "connected"
     except Exception as exc:
-        llama_detail = str(exc)
+        llama_detail = str(exc) or "connection failed"
 
     whisper_ok = False
     whisper_detail = ""
@@ -344,13 +331,12 @@ async def health():
     })
 
 
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Atlas Sight Demo Server")
+    parser = argparse.ArgumentParser(description="Atlas Sight Server")
     parser.add_argument("--ssl", action="store_true", help="Enable HTTPS with self-signed cert")
     parser.add_argument("--port", type=int, default=SIGHT_PORT)
     args = parser.parse_args()
@@ -372,17 +358,17 @@ def main():
         ssl_kwargs["ssl_certfile"] = str(cert_path)
         ssl_kwargs["ssl_keyfile"] = str(key_path)
 
-    print(f"\n  Atlas Sight Demo Server")
-    print(f"  Listening on port {args.port}")
-    print(f"  LLM backend:     {LLAMA_URL}")
-    print(f"  Whisper backend:  {WHISPER_URL}")
+    print(f"\n  Atlas Sight Server (offline)")
+    print(f"  Port:     {args.port}")
+    print(f"  LLM:      {LLAMA_URL}")
+    print(f"  Whisper:  {WHISPER_URL}")
     if args.ssl:
-        print(f"  HTTPS enabled (self-signed)")
+        print(f"  HTTPS:    enabled (self-signed)")
     print()
 
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=args.port,
         log_level="info",
         **ssl_kwargs,
@@ -391,3 +377,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

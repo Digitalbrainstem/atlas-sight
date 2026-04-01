@@ -1,88 +1,162 @@
-# Atlas Sight — Phone Demo
+# Atlas Sight — 100% Offline Phone Demo
 
-A web-based assistive vision demo. The phone captures images via camera and sends
-them to the LLM running on Overwatch for scene description. Designed for visually
-impaired users — all interaction is via touch gestures and voice.
+AI vision assistant that runs **entirely on your phone**. No cloud. No WiFi.
+No subscription. Just a phone helping someone see.
+
+Everything runs locally in [Termux](https://termux.dev) on Android:
+- **LLM:** Qwen3.5-0.8B via llama-server (~500MB model)
+- **STT:** Whisper tiny.en via whisper-server (~75MB model)
+- **TTS:** Browser speechSynthesis (built-in, instant)
+- **UI:** Chrome on localhost
+
+**Total download:** ~600MB (one-time setup)
+**Runtime RAM:** ~1.1GB
+**Works in airplane mode** after setup ✈
 
 ## Quick Start
 
+### 1. Install Termux
+
+Install **Termux from F-Droid** (NOT the Play Store — the Play Store version is
+outdated and broken):
+
+→ https://f-droid.org/packages/com.termux/
+
+### 2. Clone and set up
+
+Open Termux and run:
+
 ```bash
-cd demo
-pip install -r requirements.txt
-python server.py
-# Open on phone: http://<your-ip>:5200
+pkg install -y git
+git clone https://github.com/Digitalbrainstem/atlas-sight.git
+cd atlas-sight/demo
+bash termux-setup.sh
 ```
 
-Or use the start script:
+This takes 10-20 minutes (downloads models, builds llama.cpp + whisper.cpp).
+
+### 3. Start Atlas Sight
 
 ```bash
-chmod +x start.sh
-./start.sh
+cd ~/atlas-sight/demo
+bash start-offline.sh
 ```
+
+### 4. Open in Chrome
+
+Switch to Chrome and navigate to:
+
+```
+http://localhost:5200
+```
+
+Grant camera and microphone permissions when prompted.
+
+### 5. Use it!
+
+- **Double-tap** → capture scene → hear description
+- **Long press** → speak a question → hear answer
+- **Swipe right** → switch to "read text" mode
+- **Swipe left** → repeat last description
+- **Shake phone** → "where am I?" emergency mode
 
 ## Architecture
 
 ```
-Phone (Pixel 9)                    Blue (this machine)         Overwatch
-┌─────────────┐   HTTP POST    ┌─────────────────┐  proxy  ┌──────────────┐
-│ Chrome       │ ──────────▶   │ FastAPI :5200    │ ──────▶ │ llama-server │
-│ Camera + Mic │               │ demo/server.py   │         │ :8080        │
-│ Browser TTS  │ ◀──────────   │                  │ ◀────── │ Qwen3.5-0.8B │
-└─────────────┘   JSON resp    │  /transcribe ────│──────▶  ├──────────────┤
-                               └─────────────────┘         │ whisper.cpp  │
-                                                            │ :10300       │
-                                                            └──────────────┘
+┌──────────────────── Pixel 9 ────────────────────┐
+│                                                   │
+│  Chrome Browser (localhost:5200)                  │
+│  ┌─────────────────────────────────────────────┐  │
+│  │  Camera  ←→  Touch Gestures  ←→  Browser TTS│  │
+│  └────────────────────┬────────────────────────┘  │
+│                       │ fetch()                    │
+│  Termux               ▼                            │
+│  ┌─────────────────────────────────────────────┐  │
+│  │  FastAPI :5200  (server.py)                  │  │
+│  │  ├── /describe  → llama-server              │  │
+│  │  ├── /ask       → llama-server              │  │
+│  │  ├── /transcribe → whisper-server           │  │
+│  │  └── /health                                 │  │
+│  ├─────────────────────────────────────────────┤  │
+│  │  llama-server :8080  (Qwen3.5-0.8B Q4)     │  │
+│  ├─────────────────────────────────────────────┤  │
+│  │  whisper-server :10300  (tiny.en)           │  │
+│  └─────────────────────────────────────────────┘  │
+│                                                   │
+│  Total RAM: ~1.1 GB   •   No network needed       │
+└───────────────────────────────────────────────────┘
 ```
 
-**STT:** Phone records audio via MediaRecorder (webm/opus) → sends blob to
-`/transcribe` → server proxies to Whisper at `:10300/inference` → returns text.
+## Files
 
-**TTS:** Browser-native Web Speech API (free, instant, works offline).
+| File | Purpose |
+|------|---------|
+| `termux-setup.sh` | One-time setup: install deps, build llama.cpp, download models |
+| `start-offline.sh` | Start all services (llama + whisper + web server) |
+| `server.py` | FastAPI server — proxies between browser and local AI |
+| `index.html` | Self-contained phone UI (inline CSS+JS) |
+| `start.sh` | Start only the web server (for dev or remote LLM) |
+| `requirements.txt` | Python dependencies |
 
 ## Endpoints
 
-| Method | Path         | Description                                    |
-|--------|--------------|------------------------------------------------|
-| GET    | `/`          | Serves the single-page HTML UI                 |
-| POST   | `/describe`  | Receives base64 image, returns text description|
-| POST   | `/ask`       | Text question + optional image context → answer|
-| POST   | `/transcribe`| Proxies audio blob to Whisper for STT          |
-| GET    | `/health`    | Server health check (LLM + Whisper)            |
-
-## Phone Gestures
-
-| Gesture          | Action                                 |
-|------------------|----------------------------------------|
-| Double-tap       | Capture image → describe scene         |
-| Long press+speak | Voice question → get answer            |
-| Swipe right      | Switch to "read text" mode             |
-| Swipe left       | Repeat last description                |
-| Shake device     | "Where am I?" emergency description    |
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/` | Phone UI |
+| `POST` | `/describe` | Image → scene description via LLM |
+| `POST` | `/ask` | Voice question → answer via LLM |
+| `POST` | `/transcribe` | Audio blob → text via Whisper |
+| `GET`  | `/health` | Service status (LLM + Whisper) |
 
 ## Configuration
 
-Environment variables:
+Environment variables (all optional — defaults work for local Termux):
 
-- `LLAMA_HOST` — llama-server host (default: `192.168.3.8`)
-- `LLAMA_PORT` — llama-server port (default: `8080`)
-- `WHISPER_HOST` — Whisper STT host (default: `192.168.3.8`)
-- `WHISPER_PORT` — Whisper STT port (default: `10300`)
-- `SIGHT_PORT` — demo server port (default: `5200`)
-
-## Camera Access on Phone
-
-Chrome allows camera access over HTTP for local network IPs (e.g., `192.168.x.x`).
-If you need HTTPS, generate a self-signed certificate:
-
-```bash
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes \
-  -subj "/CN=atlas-sight"
-python server.py --ssl
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLAMA_HOST` | `127.0.0.1` | llama-server host |
+| `LLAMA_PORT` | `8080` | llama-server port |
+| `WHISPER_HOST` | `127.0.0.1` | whisper-server host |
+| `WHISPER_PORT` | `10300` | whisper-server port |
+| `SIGHT_PORT` | `5200` | Web UI port |
 
 ## Requirements
 
-- Python 3.11+
-- Phone: Chrome on Android (tested on Pixel 9)
-- LLM: llama-server running on Overwatch with a capable model
-- Network: Phone and server on the same WiFi network
+- **Phone:** Pixel 9 (or any Android with 8GB+ RAM)
+- **App:** Termux from F-Droid
+- **Browser:** Chrome for Android
+- **Storage:** ~2GB free (models + binaries)
+- **Network:** Only needed during initial setup
+
+## STT Fallback
+
+If Whisper isn't running, the UI automatically falls back to Chrome's built-in
+Web Speech API for voice input. This requires an internet connection on most
+Android devices (Google processes speech in the cloud). For true offline STT,
+use the Whisper server via `start-offline.sh`.
+
+## Troubleshooting
+
+**"LLM not running" error:**
+```bash
+# Check if llama-server is running
+curl http://localhost:8080/health
+# If not, restart:
+bash start-offline.sh
+```
+
+**Build fails in Termux:**
+```bash
+# Make sure you have enough storage (2GB+)
+df -h ~
+# Try building with fewer threads
+cd ~/atlas-sight/llama.cpp
+cmake --build build -j2
+```
+
+**Camera not working in Chrome:**
+Chrome requires a "secure context" for camera access. `localhost` counts as
+secure. If accessing from another device, use `--ssl` flag:
+```bash
+python server.py --ssl
+```
