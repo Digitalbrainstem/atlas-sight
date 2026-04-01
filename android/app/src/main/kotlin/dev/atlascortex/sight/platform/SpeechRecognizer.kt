@@ -6,7 +6,12 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.util.Log
 import androidx.core.content.ContextCompat
+import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -14,18 +19,21 @@ import kotlinx.coroutines.flow.asSharedFlow
 import java.io.File
 
 /**
- * Sherpa-ONNX Whisper STT — fully offline speech recognition.
- * Streams audio from the microphone and emits recognized text.
+ * Sherpa-ONNX Whisper offline STT — fully offline speech recognition.
+ * Records audio from the microphone, accumulates ~3 seconds of speech,
+ * then decodes with the Whisper model and emits the transcription.
  */
 class SpeechRecognizer(private val context: Context) {
 
     companion object {
+        private const val TAG = "SpeechRecognizer"
         private const val SAMPLE_RATE = 16000
         private const val CHANNEL = AudioFormat.CHANNEL_IN_MONO
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
+        private const val CHUNK_SECONDS = 3
     }
 
-    private var recognizer: Any? = null // Sherpa-ONNX OnlineRecognizer
+    private var recognizer: OfflineRecognizer? = null
     private var audioRecord: AudioRecord? = null
     private var isListening = false
     private var job: Job? = null
@@ -40,18 +48,42 @@ class SpeechRecognizer(private val context: Context) {
 
     suspend fun initialize(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val encoderFile = File(modelDir, "whisper-small-encoder.onnx")
-            val decoderFile = File(modelDir, "whisper-small-decoder.onnx")
-            if (!encoderFile.exists() || !decoderFile.exists()) return@withContext false
-            loadWhisperModel(encoderFile, decoderFile)
+            val encoderFile = File(modelDir, "tiny.en-encoder.int8.onnx")
+            val decoderFile = File(modelDir, "tiny.en-decoder.int8.onnx")
+            val tokensFile = File(modelDir, "tiny.en-tokens.txt")
+
+            if (!encoderFile.exists() || !decoderFile.exists() || !tokensFile.exists()) {
+                Log.w(TAG, "Whisper model files not found in ${modelDir.absolutePath}")
+                return@withContext false
+            }
+
+            val whisperConfig = OfflineWhisperModelConfig(
+                encoder = encoderFile.absolutePath,
+                decoder = decoderFile.absolutePath,
+                language = "en",
+                task = "transcribe",
+            )
+            val modelConfig = OfflineModelConfig(
+                whisper = whisperConfig,
+                tokens = tokensFile.absolutePath,
+                numThreads = 2,
+                provider = "cpu",
+            )
+            val config = OfflineRecognizerConfig(modelConfig = modelConfig)
+
+            recognizer = OfflineRecognizer(config = config)
+            Log.i(TAG, "Sherpa-ONNX Whisper STT initialized")
             true
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize Whisper STT", e)
+            recognizer = null
             false
         }
     }
 
     fun startListening() {
         if (isListening) return
+        if (recognizer == null) return
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED) return
 
@@ -72,20 +104,24 @@ class SpeechRecognizer(private val context: Context) {
     fun shutdown() {
         stopListening()
         scope.cancel()
-        try {
-            (recognizer as? AutoCloseable)?.close()
-        } catch (_: Exception) { }
+        recognizer?.release()
         recognizer = null
     }
 
     private suspend fun recordAndRecognize() {
         val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
-            .coerceAtLeast(SAMPLE_RATE * 2) // At least 1 second buffer
+            .coerceAtLeast(SAMPLE_RATE * 2)
 
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE, CHANNEL, ENCODING, bufferSize
-        )
+        try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE, CHANNEL, ENCODING, bufferSize
+            )
+        } catch (e: SecurityException) {
+            Log.e(TAG, "No RECORD_AUDIO permission", e)
+            isListening = false
+            return
+        }
 
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
             isListening = false
@@ -93,79 +129,43 @@ class SpeechRecognizer(private val context: Context) {
         }
 
         audioRecord?.startRecording()
+
+        val chunkSamples = SAMPLE_RATE * CHUNK_SECONDS
+        val accumulator = mutableListOf<Float>()
         val buffer = ShortArray(bufferSize / 2)
 
         while (isListening) {
             val read = audioRecord?.read(buffer, 0, buffer.size) ?: break
             if (read > 0) {
-                processAudioChunk(buffer, read)
+                for (i in 0 until read) {
+                    accumulator.add(buffer[i].toFloat() / Short.MAX_VALUE)
+                }
+
+                if (accumulator.size >= chunkSamples) {
+                    val samples = accumulator.toFloatArray()
+                    accumulator.clear()
+                    decodeChunk(samples)
+                }
             }
         }
     }
 
-    private fun processAudioChunk(samples: ShortArray, count: Int) {
-        if (recognizer == null) return
+    private fun decodeChunk(samples: FloatArray) {
+        val rec = recognizer ?: return
         try {
-            // Feed audio to Sherpa-ONNX recognizer
-            val floatSamples = FloatArray(count) { samples[it].toFloat() / Short.MAX_VALUE }
-            feedAudioToRecognizer(floatSamples)
+            val stream = rec.createStream()
+            stream.acceptWaveform(samples, SAMPLE_RATE)
+            rec.decode(stream)
+            val result = rec.getResult(stream)
+            stream.release()
 
-            // Check for results
-            val text = getRecognizerResult()
+            val text = result.text.trim()
             if (text.isNotBlank()) {
-                _transcriptions.tryEmit(text.trim())
+                Log.d(TAG, "Transcribed: $text")
+                _transcriptions.tryEmit(text)
             }
-        } catch (_: Exception) { }
-    }
-
-    private fun feedAudioToRecognizer(samples: FloatArray) {
-        try {
-            val stream = recognizer!!.javaClass.getMethod("createStream").invoke(recognizer)
-            stream.javaClass.getMethod("acceptWaveform", FloatArray::class.java, Int::class.javaPrimitiveType)
-                .invoke(stream, samples, SAMPLE_RATE)
-            recognizer!!.javaClass.getMethod("decode", stream.javaClass).invoke(recognizer, stream)
-        } catch (_: Exception) { }
-    }
-
-    private fun getRecognizerResult(): String {
-        return try {
-            val result = recognizer!!.javaClass.getMethod("getResult").invoke(recognizer)
-            result?.javaClass?.getMethod("getText")?.invoke(result)?.toString() ?: ""
-        } catch (_: Exception) {
-            ""
+        } catch (e: Exception) {
+            Log.e(TAG, "Whisper decode failed", e)
         }
-    }
-
-    private fun loadWhisperModel(encoder: File, decoder: File) {
-        try {
-            val configClass = Class.forName("com.k2fsa.sherpa.onnx.OnlineRecognizerConfig")
-            val modelConfigClass = Class.forName("com.k2fsa.sherpa.onnx.OnlineModelConfig")
-            val whisperConfigClass = Class.forName("com.k2fsa.sherpa.onnx.OnlineWhisperModelConfig")
-
-            val whisperConfig = whisperConfigClass.getDeclaredConstructor().newInstance()
-            setField(whisperConfig, "encoder", encoder.absolutePath)
-            setField(whisperConfig, "decoder", decoder.absolutePath)
-
-            val modelConfig = modelConfigClass.getDeclaredConstructor().newInstance()
-            setField(modelConfig, "whisper", whisperConfig)
-
-            val tokensFile = File(modelDir, "tokens.txt")
-            if (tokensFile.exists()) setField(modelConfig, "tokens", tokensFile.absolutePath)
-
-            val config = configClass.getDeclaredConstructor().newInstance()
-            setField(config, "modelConfig", modelConfig)
-
-            val recognizerClass = Class.forName("com.k2fsa.sherpa.onnx.OnlineRecognizer")
-            recognizer = recognizerClass.getDeclaredConstructor(configClass).newInstance(config)
-        } catch (_: Exception) {
-            recognizer = null
-        }
-    }
-
-    private fun setField(obj: Any, fieldName: String, value: Any) {
-        try {
-            val field = obj.javaClass.getField(fieldName)
-            field.set(obj, value)
-        } catch (_: Exception) { }
     }
 }

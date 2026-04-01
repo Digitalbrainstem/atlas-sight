@@ -95,6 +95,12 @@ dependencies {
     // VLM native inference (llama.cpp + mtmd)
     implementation(project(":lib"))
 
+    // Sherpa-ONNX (offline TTS + STT)
+    implementation(files("../libs/sherpa-onnx-1.12.34.aar"))
+
+    // tar.bz2 extraction for model archives
+    implementation("org.apache.commons:commons-compress:1.26.0")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

@@ -103,7 +103,8 @@ class SightEngine(private val context: Context) {
 
         _statusText.value = when {
             visionReady && ttsReady -> "Atlas Sight ready. Double-tap or say Hey Atlas."
-            !visionReady -> "Vision model not loaded. Download models first."
+            !visionReady && ttsReady -> "Voice ready. Vision model loading failed — voice commands and gestures are active."
+            !visionReady -> "Vision model failed to load. Voice commands and gestures are active."
             else -> "Voice engine not available. Touch gestures active."
         }
 

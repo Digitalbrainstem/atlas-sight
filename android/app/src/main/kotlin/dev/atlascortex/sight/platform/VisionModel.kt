@@ -24,16 +24,26 @@ class VisionModel(private val context: Context) {
         try {
             val modelFile = File(modelDir, "Qwen3-VL-2B-Instruct-Q4_K_M.gguf")
             if (!modelFile.exists()) {
+                android.util.Log.e("VisionModel", "Model file not found: ${modelFile.absolutePath}")
                 return@withContext false
             }
+            android.util.Log.i("VisionModel", "Model file found: ${modelFile.length() / 1_000_000}MB")
 
             val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            android.util.Log.i("VisionModel", "Initializing native engine from: $nativeLibDir")
             engine.init(nativeLibDir)
 
             val nThreads = (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4)
+            android.util.Log.i("VisionModel", "Loading model with $nThreads threads...")
             isLoaded = engine.loadModel(modelFile.absolutePath, nThreads)
+            android.util.Log.i("VisionModel", "Model load result: $isLoaded")
             isLoaded
         } catch (e: Exception) {
+            android.util.Log.e("VisionModel", "Model load failed: ${e.message}", e)
+            isLoaded = false
+            false
+        } catch (e: UnsatisfiedLinkError) {
+            android.util.Log.e("VisionModel", "Native library not found: ${e.message}", e)
             isLoaded = false
             false
         }

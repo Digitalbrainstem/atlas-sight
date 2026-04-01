@@ -1,25 +1,35 @@
 package dev.atlascortex.sight.util
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
+import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
  * First-run model download with voice progress announcements.
- * Downloads Qwen3-VL-2B, Whisper STT, and Piper TTS models.
+ * Downloads Qwen3-VL-2B, Whisper STT (tarball), and Piper TTS (tarball).
+ * Tarballs are extracted after download using Apache Commons Compress.
  */
 class ModelDownloader(private val context: Context) {
 
+    companion object {
+        private const val TAG = "ModelDownloader"
+    }
+
     data class DownloadProgress(
         val modelName: String,
-        val progress: Float, // 0.0 to 1.0
+        val progress: Float,
         val isComplete: Boolean = false,
         val error: String? = null,
     )
@@ -30,7 +40,6 @@ class ModelDownloader(private val context: Context) {
     private val _overallStatus = MutableStateFlow("Checking models…")
     val overallStatus: StateFlow<String> = _overallStatus.asStateFlow()
 
-    /** Model definitions with download URLs. */
     data class ModelInfo(
         val name: String,
         val displayName: String,
@@ -38,6 +47,7 @@ class ModelDownloader(private val context: Context) {
         val targetDir: String,
         val targetFile: String,
         val sizeDescription: String,
+        val isTarball: Boolean = false,
     )
 
     private val models = listOf(
@@ -55,40 +65,46 @@ class ModelDownloader(private val context: Context) {
             url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2",
             targetDir = "models/whisper-stt",
             targetFile = "sherpa-onnx-whisper-tiny.en.tar.bz2",
-            sizeDescription = "118 megabytes",
+            sizeDescription = "40 megabytes",
+            isTarball = true,
         ),
         ModelInfo(
             name = "piper-tts",
             displayName = "Voice synthesis",
-            url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
+            url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-kristin-medium.tar.bz2",
             targetDir = "models/piper-tts",
-            targetFile = "en_US-amy-medium.onnx",
-            sizeDescription = "63 megabytes",
-        ),
-        ModelInfo(
-            name = "piper-tts-config",
-            displayName = "Voice configuration",
-            url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json",
-            targetDir = "models/piper-tts",
-            targetFile = "en_US-amy-medium.onnx.json",
-            sizeDescription = "5 kilobytes",
+            targetFile = "vits-piper-en_US-kristin-medium.tar.bz2",
+            sizeDescription = "67 megabytes",
+            isTarball = true,
         ),
     )
 
-    /** Check which models are already downloaded. */
+    /** Check which models are ready (extracted if tarball, downloaded if plain). */
     fun getModelStatus(): Map<String, Boolean> =
         models.associate { model ->
-            val file = File(context.filesDir, "${model.targetDir}/${model.targetFile}")
-            model.name to file.exists()
+            model.name to isModelReady(model)
         }
 
-    /** Check if all required models are present. */
+    private fun isModelReady(model: ModelInfo): Boolean {
+        val dir = File(context.filesDir, model.targetDir)
+        return when (model.name) {
+            "whisper-stt" -> {
+                File(dir, "tiny.en-encoder.int8.onnx").exists() &&
+                File(dir, "tiny.en-decoder.int8.onnx").exists() &&
+                File(dir, "tiny.en-tokens.txt").exists()
+            }
+            "piper-tts" -> {
+                File(dir, "tokens.txt").exists() &&
+                File(dir, "espeak-ng-data").isDirectory
+            }
+            else -> File(dir, model.targetFile).exists()
+        }
+    }
+
     fun allModelsReady(): Boolean = getModelStatus().values.all { it }
 
-    /** Get total download size description. */
-    fun getTotalSizeDescription(): String = "about 1.3 gigabytes"
+    fun getTotalSizeDescription(): String = "about 1.2 gigabytes"
 
-    /** Download all missing models. Returns voice announcement strings for progress. */
     suspend fun downloadMissingModels(
         onAnnounce: (String) -> Unit,
     ): Boolean = withContext(Dispatchers.IO) {
@@ -137,37 +153,11 @@ class ModelDownloader(private val context: Context) {
             val targetFile = File(dir, model.targetFile)
             val tempFile = File(dir, "${model.targetFile}.downloading")
 
-            val url = URL(model.url)
-            val connection = url.openConnection() as HttpURLConnection
-            connection.connectTimeout = 30000
-            connection.readTimeout = 60000
-            connection.requestMethod = "GET"
-            connection.instanceFollowRedirects = true
-            // HuggingFace requires a user-agent
-            connection.setRequestProperty("User-Agent", "AtlasSight/1.0")
-
-            // Follow redirects manually for HTTPS->HTTPS redirects
-            var finalConnection = connection
-            var redirects = 0
-            while (redirects < 5) {
-                val code = finalConnection.responseCode
-                if (code == HttpURLConnection.HTTP_MOVED_TEMP ||
-                    code == HttpURLConnection.HTTP_MOVED_PERM ||
-                    code == HttpURLConnection.HTTP_SEE_OTHER ||
-                    code == 307 || code == 308) {
-                    val location = finalConnection.getHeaderField("Location") ?: break
-                    finalConnection.disconnect()
-                    val redirectUrl = URL(location)
-                    finalConnection = redirectUrl.openConnection() as HttpURLConnection
-                    finalConnection.connectTimeout = 30000
-                    finalConnection.readTimeout = 60000
-                    finalConnection.instanceFollowRedirects = true
-                    finalConnection.setRequestProperty("User-Agent", "AtlasSight/1.0")
-                    redirects++
-                } else {
-                    break
+            val finalConnection = openConnectionWithRedirects(model.url)
+                ?: run {
+                    onAnnounce("Could not connect to download ${model.displayName}.")
+                    return@withContext false
                 }
-            }
 
             if (finalConnection.responseCode != HttpURLConnection.HTTP_OK) {
                 onAnnounce("Server returned error ${finalConnection.responseCode} for ${model.displayName}.")
@@ -186,14 +176,12 @@ class ModelDownloader(private val context: Context) {
                         output.write(buffer, 0, read)
                         downloaded += read
 
-                        // Progress update
                         if (totalSize > 0) {
                             val percent = ((downloaded * 100) / totalSize).toInt()
                             _progress.value = DownloadProgress(
                                 model.displayName,
                                 downloaded.toFloat() / totalSize.toFloat(),
                             )
-                            // Announce every 25%
                             val milestone = (percent / 25) * 25
                             if (milestone > lastAnnouncedPercent && milestone > 0) {
                                 lastAnnouncedPercent = milestone
@@ -204,13 +192,103 @@ class ModelDownloader(private val context: Context) {
                 }
             }
 
-            // Rename temp to final
             tempFile.renameTo(targetFile)
+
+            if (model.isTarball) {
+                onAnnounce("Extracting ${model.displayName}…")
+                extractTarBz2(targetFile, dir)
+                targetFile.delete()
+            }
+
             _progress.value = DownloadProgress(model.displayName, 1f, isComplete = true)
             true
         } catch (e: Exception) {
+            Log.e(TAG, "Download failed for ${model.name}", e)
             _progress.value = DownloadProgress(model.displayName, 0f, error = e.message)
             false
         }
+    }
+
+    private fun openConnectionWithRedirects(urlStr: String): HttpURLConnection? {
+        var connection = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 30_000
+            readTimeout = 60_000
+            requestMethod = "GET"
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "AtlasSight/1.0")
+        }
+
+        var redirects = 0
+        while (redirects < 5) {
+            val code = connection.responseCode
+            if (code in listOf(301, 302, 303, 307, 308)) {
+                val location = connection.getHeaderField("Location") ?: return null
+                connection.disconnect()
+                connection = (URL(location).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 30_000
+                    readTimeout = 60_000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "AtlasSight/1.0")
+                }
+                redirects++
+            } else {
+                break
+            }
+        }
+        return connection
+    }
+
+    /**
+     * Extract a .tar.bz2 archive, flattening the top-level directory so files
+     * end up directly inside [targetDir] rather than nested.
+     */
+    private fun extractTarBz2(tarBz2File: File, targetDir: File) {
+        FileInputStream(tarBz2File).use { fis ->
+            BufferedInputStream(fis).use { bis ->
+                BZip2CompressorInputStream(bis).use { bzIn ->
+                    TarArchiveInputStream(bzIn).use { tarIn ->
+                        var entry = tarIn.nextEntry
+                        while (entry != null) {
+                            // Strip the top-level directory from the path
+                            val entryName = entry.name
+                            val stripped = entryName.substringAfter('/', entryName)
+                            if (stripped.isEmpty() || stripped == entryName.trimEnd('/')) {
+                                // Top-level dir entry itself — skip
+                                if (entry.isDirectory && '/' !in entryName.trimEnd('/')) {
+                                    entry = tarIn.nextEntry
+                                    continue
+                                }
+                            }
+
+                            val outputName = if ('/' in entryName) stripped else entryName
+                            if (outputName.isBlank()) {
+                                entry = tarIn.nextEntry
+                                continue
+                            }
+
+                            val outputFile = File(targetDir, outputName)
+
+                            // Guard against zip-slip
+                            if (!outputFile.canonicalPath.startsWith(targetDir.canonicalPath)) {
+                                entry = tarIn.nextEntry
+                                continue
+                            }
+
+                            if (entry.isDirectory) {
+                                outputFile.mkdirs()
+                            } else {
+                                outputFile.parentFile?.mkdirs()
+                                FileOutputStream(outputFile).use { fos ->
+                                    tarIn.copyTo(fos, 65536)
+                                }
+                            }
+
+                            entry = tarIn.nextEntry
+                        }
+                    }
+                }
+            }
+        }
+        Log.i(TAG, "Extracted ${tarBz2File.name} to ${targetDir.absolutePath}")
     }
 }
