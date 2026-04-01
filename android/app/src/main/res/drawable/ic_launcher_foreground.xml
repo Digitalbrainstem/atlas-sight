@@ -3,32 +3,51 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Eye outline (almond shape) -->
+    <!-- Eye shape (upper lid) - centered in safe zone -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,36c-18,0 -30,14 -34,18c4,4 16,18 34,18s30,-14 34,-18C84,50 72,36 54,36z" />
-    <!-- Iris (cyan/frost circle) -->
+        android:fillColor="#00000000"
+        android:strokeColor="#00d4ff"
+        android:strokeWidth="1.2"
+        android:pathData="M24,54 Q42,34 54,33 Q66,34 84,54" />
+    <!-- Eye shape (lower lid) -->
     <path
-        android:fillColor="#22D3EE"
-        android:pathData="M54,42a12,12 0,1 1,0 24a12,12 0,1 1,0 -24z" />
+        android:fillColor="#00000000"
+        android:strokeColor="#00d4ff"
+        android:strokeWidth="1.2"
+        android:pathData="M24,54 Q42,74 54,75 Q66,74 84,54" />
+    <!-- Iris outer ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00d4ff"
+        android:strokeWidth="1"
+        android:pathData="M54,39a15,15 0,1 1,0 30a15,15 0,1 1,0 -30z" />
+    <!-- Neural ring inside iris -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00d4ff"
+        android:strokeWidth="0.6"
+        android:pathData="M54,44a10,10 0,1 1,0 20a10,10 0,1 1,0 -20z" />
+    <!-- Neural nodes on iris (cyan) -->
+    <path android:fillColor="#00d4ff" android:pathData="M54,40a1,1 0,1 1,0 2a1,1 0,1 1,0 -2z" />
+    <path android:fillColor="#00d4ff" android:pathData="M54,66a1,1 0,1 1,0 2a1,1 0,1 1,0 -2z" />
+    <path android:fillColor="#00d4ff" android:pathData="M39,53a1,1 0,1 1,0 2a1,1 0,1 1,0 -2z" />
+    <path android:fillColor="#00d4ff" android:pathData="M68,53a1,1 0,1 1,0 2a1,1 0,1 1,0 -2z" />
+    <!-- Neural nodes (amber accents) -->
+    <path android:fillColor="#f59e0b" android:pathData="M46,45a1,1 0,1 1,0 2a1,1 0,1 1,0 -2z" />
+    <path android:fillColor="#f59e0b" android:pathData="M61,45a1,1 0,1 1,0 2a1,1 0,1 1,0 -2z" />
+    <!-- Neural connections -->
+    <path android:fillColor="#00000000" android:strokeColor="#f59e0b" android:strokeWidth="0.4"
+        android:pathData="M46,46 L54,41 L62,46" />
+    <path android:fillColor="#00000000" android:strokeColor="#00d4ff" android:strokeWidth="0.4"
+        android:pathData="M46,46 L40,54" />
+    <path android:fillColor="#00000000" android:strokeColor="#00d4ff" android:strokeWidth="0.4"
+        android:pathData="M62,46 L68,54" />
     <!-- Pupil (dark center) -->
-    <path
-        android:fillColor="#0F172A"
-        android:pathData="M54,48a6,6 0,1 1,0 12a6,6 0,1 1,0 -12z" />
+    <path android:fillColor="#0a0a0a" android:pathData="M54,49a5,5 0,1 1,0 10a5,5 0,1 1,0 -10z" />
+    <!-- Pupil core (cyan glow) -->
+    <path android:fillColor="#00d4ff" android:pathData="M54,51a3,3 0,1 1,0 6a3,3 0,1 1,0 -6z" />
+    <!-- Pupil center (white) -->
+    <path android:fillColor="#FFFFFF" android:pathData="M54,52.5a1.5,1.5 0,1 1,0 3a1.5,1.5 0,1 1,0 -3z" />
     <!-- Light reflection -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M50,49a2.5,2.5 0,1 1,0 5a2.5,2.5 0,1 1,0 -5z" />
-    <!-- Aurora accent arc above eye -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#A78BFA"
-        android:strokeWidth="2"
-        android:pathData="M30,38 Q54,26 78,38" />
-    <!-- Aurora accent arc below eye -->
-    <path
-        android:fillColor="#00000000"
-        android:strokeColor="#A78BFA"
-        android:strokeWidth="2"
-        android:pathData="M30,70 Q54,82 78,70" />
+    <path android:fillColor="#FFFFFF" android:pathData="M57,51a1,1 0,1 1,0 2a1,1 0,1 1,0 -2z" />
 </vector>

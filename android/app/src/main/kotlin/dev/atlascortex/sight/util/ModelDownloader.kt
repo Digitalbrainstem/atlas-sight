@@ -44,34 +44,34 @@ class ModelDownloader(private val context: Context) {
         ModelInfo(
             name = "qwen3-vl",
             displayName = "Vision AI",
-            url = "https://huggingface.co/Qwen/Qwen3-VL-2B-ONNX/resolve/main/qwen3-vl-2b-q4.onnx",
+            url = "https://huggingface.co/unsloth/Qwen3-VL-2B-Instruct-GGUF/resolve/main/Qwen3-VL-2B-Instruct-Q4_K_M.gguf",
             targetDir = "models/qwen3-vl",
-            targetFile = "qwen3-vl-2b-q4.onnx",
-            sizeDescription = "800 megabytes",
+            targetFile = "Qwen3-VL-2B-Instruct-Q4_K_M.gguf",
+            sizeDescription = "1.1 gigabytes",
         ),
         ModelInfo(
-            name = "whisper-encoder",
-            displayName = "Speech recognition encoder",
-            url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/whisper-small-encoder.onnx",
+            name = "whisper-stt",
+            displayName = "Speech recognition",
+            url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2",
             targetDir = "models/whisper-stt",
-            targetFile = "whisper-small-encoder.onnx",
-            sizeDescription = "150 megabytes",
-        ),
-        ModelInfo(
-            name = "whisper-decoder",
-            displayName = "Speech recognition decoder",
-            url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/whisper-small-decoder.onnx",
-            targetDir = "models/whisper-stt",
-            targetFile = "whisper-small-decoder.onnx",
-            sizeDescription = "50 megabytes",
+            targetFile = "sherpa-onnx-whisper-tiny.en.tar.bz2",
+            sizeDescription = "118 megabytes",
         ),
         ModelInfo(
             name = "piper-tts",
             displayName = "Voice synthesis",
-            url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/en_US-amy-medium.onnx",
+            url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
             targetDir = "models/piper-tts",
             targetFile = "en_US-amy-medium.onnx",
-            sizeDescription = "15 megabytes",
+            sizeDescription = "63 megabytes",
+        ),
+        ModelInfo(
+            name = "piper-tts-config",
+            displayName = "Voice configuration",
+            url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json",
+            targetDir = "models/piper-tts",
+            targetFile = "en_US-amy-medium.onnx.json",
+            sizeDescription = "5 kilobytes",
         ),
     )
 
@@ -86,7 +86,7 @@ class ModelDownloader(private val context: Context) {
     fun allModelsReady(): Boolean = getModelStatus().values.all { it }
 
     /** Get total download size description. */
-    fun getTotalSizeDescription(): String = "about 1 gigabyte"
+    fun getTotalSizeDescription(): String = "about 1.3 gigabytes"
 
     /** Download all missing models. Returns voice announcement strings for progress. */
     suspend fun downloadMissingModels(
