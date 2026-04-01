@@ -15,7 +15,8 @@ echo "============================================"
 echo ""
 echo "  Open on phone: http://${LOCAL_IP}:5200"
 echo ""
-echo "  LLM backend:   http://192.168.3.8:8080"
+echo "  LLM backend:    http://192.168.3.8:8080"
+echo "  Whisper STT:    http://192.168.3.8:10300"
 echo "============================================"
 
 python3 server.py

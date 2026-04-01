@@ -25,6 +25,9 @@ logger = logging.getLogger("atlas-sight")
 LLAMA_HOST = os.getenv("LLAMA_HOST", "192.168.3.8")
 LLAMA_PORT = os.getenv("LLAMA_PORT", "8080")
 LLAMA_URL = f"http://{LLAMA_HOST}:{LLAMA_PORT}"
+WHISPER_HOST = os.getenv("WHISPER_HOST", "192.168.3.8")
+WHISPER_PORT = os.getenv("WHISPER_PORT", "10300")
+WHISPER_URL = f"http://{WHISPER_HOST}:{WHISPER_PORT}"
 SIGHT_PORT = int(os.getenv("SIGHT_PORT", "5200"))
 DEMO_DIR = Path(__file__).parent
 
@@ -249,18 +252,82 @@ async def ask(request: Request):
     return JSONResponse({"answer": answer})
 
 
+@app.post("/transcribe")
+async def transcribe(request: Request):
+    """Receive audio from the phone and proxy to Whisper for transcription.
+
+    Accepts raw audio blob (webm/opus from MediaRecorder).
+    Whisper's --convert flag handles format conversion automatically.
+    """
+    content_type = request.headers.get("content-type", "")
+    audio_bytes = await request.body()
+
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="No audio data provided")
+
+    # Determine filename/content-type for the upload
+    if "webm" in content_type:
+        filename = "audio.webm"
+        ct = "audio/webm"
+    elif "ogg" in content_type:
+        filename = "audio.ogg"
+        ct = "audio/ogg"
+    elif "wav" in content_type:
+        filename = "audio.wav"
+        ct = "audio/wav"
+    else:
+        filename = "audio.webm"
+        ct = "audio/webm"
+
+    client = await get_client()
+    try:
+        resp = await client.post(
+            f"{WHISPER_URL}/inference",
+            files={"file": (filename, audio_bytes, ct)},
+            data={
+                "temperature": "0.0",
+                "temperature_inc": "0.2",
+                "response_format": "json",
+                "language": "en",
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        text = data.get("text", "").strip()
+        return JSONResponse({"text": text})
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Cannot reach Whisper server at {WHISPER_URL}",
+        )
+    except Exception as exc:
+        logger.exception("Whisper transcription failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.get("/health")
 async def health():
-    """Check server health and llama-server connectivity."""
+    """Check server health and backend connectivity."""
+    client = await get_client()
+
     llama_ok = False
     llama_detail = ""
     try:
-        client = await get_client()
         resp = await client.get(f"{LLAMA_URL}/health", timeout=5.0)
         llama_ok = resp.status_code == 200
         llama_detail = "connected"
     except Exception as exc:
         llama_detail = str(exc)
+
+    whisper_ok = False
+    whisper_detail = ""
+    try:
+        resp = await client.get(f"{WHISPER_URL}/", timeout=5.0)
+        whisper_ok = resp.status_code == 200
+        whisper_detail = "connected"
+    except Exception as exc:
+        whisper_detail = str(exc) or "connection failed"
 
     return JSONResponse({
         "status": "ok",
@@ -268,6 +335,11 @@ async def health():
             "url": LLAMA_URL,
             "connected": llama_ok,
             "detail": llama_detail,
+        },
+        "whisper_server": {
+            "url": WHISPER_URL,
+            "connected": whisper_ok,
+            "detail": whisper_detail,
         },
     })
 
@@ -302,7 +374,8 @@ def main():
 
     print(f"\n  Atlas Sight Demo Server")
     print(f"  Listening on port {args.port}")
-    print(f"  LLM backend: {LLAMA_URL}")
+    print(f"  LLM backend:     {LLAMA_URL}")
+    print(f"  Whisper backend:  {WHISPER_URL}")
     if args.ssl:
         print(f"  HTTPS enabled (self-signed)")
     print()

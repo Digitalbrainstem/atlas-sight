@@ -27,18 +27,27 @@ Phone (Pixel 9)                    Blue (this machine)         Overwatch
 ┌─────────────┐   HTTP POST    ┌─────────────────┐  proxy  ┌──────────────┐
 │ Chrome       │ ──────────▶   │ FastAPI :5200    │ ──────▶ │ llama-server │
 │ Camera + Mic │               │ demo/server.py   │         │ :8080        │
-│ TTS + STT    │ ◀──────────   │                  │ ◀────── │ Qwen3.5-0.8B │
-└─────────────┘   JSON resp    └─────────────────┘         └──────────────┘
+│ Browser TTS  │ ◀──────────   │                  │ ◀────── │ Qwen3.5-0.8B │
+└─────────────┘   JSON resp    │  /transcribe ────│──────▶  ├──────────────┤
+                               └─────────────────┘         │ whisper.cpp  │
+                                                            │ :10300       │
+                                                            └──────────────┘
 ```
+
+**STT:** Phone records audio via MediaRecorder (webm/opus) → sends blob to
+`/transcribe` → server proxies to Whisper at `:10300/inference` → returns text.
+
+**TTS:** Browser-native Web Speech API (free, instant, works offline).
 
 ## Endpoints
 
-| Method | Path        | Description                                    |
-|--------|-------------|------------------------------------------------|
-| GET    | `/`         | Serves the single-page HTML UI                 |
-| POST   | `/describe` | Receives base64 image, returns text description|
-| POST   | `/ask`      | Text question + optional image context → answer|
-| GET    | `/health`   | Server health check                            |
+| Method | Path         | Description                                    |
+|--------|--------------|------------------------------------------------|
+| GET    | `/`          | Serves the single-page HTML UI                 |
+| POST   | `/describe`  | Receives base64 image, returns text description|
+| POST   | `/ask`       | Text question + optional image context → answer|
+| POST   | `/transcribe`| Proxies audio blob to Whisper for STT          |
+| GET    | `/health`    | Server health check (LLM + Whisper)            |
 
 ## Phone Gestures
 
@@ -56,6 +65,8 @@ Environment variables:
 
 - `LLAMA_HOST` — llama-server host (default: `192.168.3.8`)
 - `LLAMA_PORT` — llama-server port (default: `8080`)
+- `WHISPER_HOST` — Whisper STT host (default: `192.168.3.8`)
+- `WHISPER_PORT` — Whisper STT port (default: `10300`)
 - `SIGHT_PORT` — demo server port (default: `5200`)
 
 ## Camera Access on Phone

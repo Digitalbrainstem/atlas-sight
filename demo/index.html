@@ -287,74 +287,111 @@ html, body {
   }
 
   // -----------------------------------------------------------------------
-  // STT — Web Speech API
+  // STT — MediaRecorder → Whisper (via /transcribe proxy)
   // -----------------------------------------------------------------------
-  let recognition = null;
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let audioStream = null;
 
-  function initSTT() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return null;
-
-    recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      setStatus('ready', `Heard: "${transcript}"`);
-      beepStopListen();
-      state.listening = false;
-      handleVoiceQuestion(transcript);
-    };
-
-    recognition.onerror = (event) => {
-      state.listening = false;
-      if (event.error === 'no-speech') {
-        setStatus('ready', 'No speech detected. Try again.');
-        speak('I didn\'t hear anything. Try again.');
-      } else if (event.error !== 'aborted') {
-        setStatus('error', `Speech error: ${event.error}`);
-        errorTone();
-      }
-    };
-
-    recognition.onend = () => {
-      state.listening = false;
-      statusDot.classList.remove('listening');
-    };
-
-    return recognition;
+  async function initSTT() {
+    try {
+      audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 },
+      });
+      return true;
+    } catch (err) {
+      logger.warn('Microphone not available:', err);
+      return false;
+    }
   }
 
+  // Tiny logger shim (no-op in prod, avoids referencing console in tight loops)
+  const logger = { warn: (...a) => console.warn(...a) };
+
   function startListening() {
-    if (!recognition) {
-      speak('Voice input is not supported on this device.');
+    if (!audioStream) {
+      speak('Microphone access is needed for voice questions.');
       return;
     }
     if (state.listening) return;
 
     stopSpeech();
     state.listening = true;
+    audioChunks = [];
     beepListen();
     vibrate(50);
     setStatus('listening', 'Listening… speak now');
-    speak('Listening', () => {
-      try {
-        recognition.start();
-      } catch (e) {
-        state.listening = false;
-        setStatus('error', 'Could not start microphone');
+
+    // Pick a supported MIME type
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : '';
+
+    const opts = mimeType ? { mimeType } : {};
+    mediaRecorder = new MediaRecorder(audioStream, opts);
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      state.listening = false;
+      statusDot.classList.remove('listening');
+      beepStopListen();
+
+      if (audioChunks.length === 0) {
+        setStatus('ready', 'No audio captured');
+        speak('I didn\'t hear anything. Try again.');
+        return;
       }
-    });
+
+      const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      audioChunks = [];
+
+      // Send to server for Whisper transcription
+      setStatus('busy', 'Transcribing…');
+      try {
+        const resp = await fetch(`${API_BASE}/transcribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': blob.type },
+          body: blob,
+        });
+        if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+        const data = await resp.json();
+        const transcript = (data.text || '').trim();
+
+        if (!transcript || transcript === '[BLANK_AUDIO]') {
+          setStatus('ready', 'No speech detected');
+          speak('I didn\'t catch that. Try again.');
+          return;
+        }
+
+        setStatus('ready', `Heard: "${transcript}"`);
+        handleVoiceQuestion(transcript);
+      } catch (err) {
+        errorTone();
+        setStatus('error', 'Transcription failed');
+        speak('Sorry, I could not understand the audio. Please try again.');
+      }
+    };
+
+    mediaRecorder.onerror = () => {
+      state.listening = false;
+      statusDot.classList.remove('listening');
+      errorTone();
+      setStatus('error', 'Recording error');
+    };
+
+    mediaRecorder.start(250); // collect data every 250ms
   }
 
   function stopListening() {
-    if (recognition && state.listening) {
-      recognition.stop();
-      state.listening = false;
+    if (mediaRecorder && state.listening && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
     }
+    state.listening = false;
   }
 
   // -----------------------------------------------------------------------
@@ -672,17 +709,29 @@ html, body {
   // -----------------------------------------------------------------------
   async function init() {
     setStatus('busy', 'Starting…');
-    initSTT();
 
+    // Request camera (video only — mic requested separately)
     const camOk = await initCamera();
     if (!camOk) return;
+
+    // Request microphone for Whisper STT
+    const micOk = await initSTT();
+    if (!micOk) {
+      setStatus('ready', 'Ready (no mic — voice input disabled)');
+    }
 
     // Quick health check
     try {
       const resp = await fetch(`${API_BASE}/health`);
       const data = await resp.json();
-      if (data.llama_server && !data.llama_server.connected) {
+      const llmOk = data.llama_server && data.llama_server.connected;
+      const sttOk = data.whisper_server && data.whisper_server.connected;
+      if (!llmOk && !sttOk) {
+        setStatus('ready', 'Ready (LLM + Whisper offline)');
+      } else if (!llmOk) {
         setStatus('ready', 'Ready (LLM offline — demo mode)');
+      } else if (!sttOk) {
+        setStatus('ready', 'Ready (Whisper offline — no voice input)');
       }
     } catch (e) {
       // Server might not be reachable for health check yet
