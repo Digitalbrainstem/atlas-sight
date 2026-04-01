@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.*
 class SightEngine(private val context: Context) {
 
     // Core
-    val config = Config()
+    val config = Config(context)
     val commandParser = CommandParser()
     val contextTracker = ContextTracker()
     val obstacleWarner = ObstacleWarner()
@@ -91,6 +91,11 @@ class SightEngine(private val context: Context) {
         val ttsReady = speechSynthesizer.initialize()
         val sttReady = speechRecognizer.initialize()
         wakeWordDetector.initialize()
+
+        // Start mic capture so voice commands work
+        if (sttReady) {
+            speechRecognizer.startListening()
+        }
 
         if (ttsReady) {
             speechSynthesizer.speak(
