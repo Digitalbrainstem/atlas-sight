@@ -287,157 +287,74 @@ html, body {
   }
 
   // -----------------------------------------------------------------------
-  // STT — MediaRecorder → Whisper, with Web Speech API fallback
+  // STT — Web Speech API (works offline on Pixel 9 with language pack)
   // -----------------------------------------------------------------------
-  let mediaRecorder = null;
-  let audioChunks = [];
-  let audioStream = null;
-  let whisperAvailable = false;
-  let webSpeechRecognition = null;
+  let recognition = null;
 
-  async function initSTT() {
-    // Get microphone stream for Whisper recording
-    try {
-      audioStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 },
-      });
-    } catch (err) {
-      console.warn('Microphone not available:', err);
-    }
-
-    // Also set up Web Speech API as fallback
+  function initSTT() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      webSpeechRecognition = new SpeechRecognition();
-      webSpeechRecognition.lang = 'en-US';
-      webSpeechRecognition.continuous = false;
-      webSpeechRecognition.interimResults = false;
-      webSpeechRecognition.maxAlternatives = 1;
+    if (!SpeechRecognition) return false;
 
-      webSpeechRecognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        setStatus('ready', `Heard: "${transcript}"`);
-        beepStopListen();
-        state.listening = false;
-        handleVoiceQuestion(transcript);
-      };
+    recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
 
-      webSpeechRecognition.onerror = (event) => {
-        state.listening = false;
-        statusDot.classList.remove('listening');
-        if (event.error === 'no-speech') {
-          setStatus('ready', 'No speech detected. Try again.');
-          speak('I didn\'t hear anything. Try again.');
-        } else if (event.error !== 'aborted') {
-          errorTone();
-          setStatus('error', `Speech error: ${event.error}`);
-        }
-      };
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setStatus('ready', `Heard: "${transcript}"`);
+      beepStopListen();
+      state.listening = false;
+      handleVoiceQuestion(transcript);
+    };
 
-      webSpeechRecognition.onend = () => {
-        state.listening = false;
-        statusDot.classList.remove('listening');
-      };
-    }
+    recognition.onerror = (event) => {
+      state.listening = false;
+      statusDot.classList.remove('listening');
+      if (event.error === 'no-speech') {
+        setStatus('ready', 'No speech detected');
+        speak('I didn\'t hear anything. Try again.');
+      } else if (event.error !== 'aborted') {
+        errorTone();
+        setStatus('error', `Speech error: ${event.error}`);
+      }
+    };
 
-    return !!(audioStream || webSpeechRecognition);
+    recognition.onend = () => {
+      state.listening = false;
+      statusDot.classList.remove('listening');
+    };
+
+    return true;
   }
 
   function startListening() {
-    if (!audioStream && !webSpeechRecognition) {
-      speak('Microphone access is needed for voice questions.');
+    if (!recognition) {
+      speak('Voice input is not available on this browser.');
       return;
     }
     if (state.listening) return;
 
     stopSpeech();
     state.listening = true;
-    audioChunks = [];
     beepListen();
     vibrate(50);
     setStatus('listening', 'Listening… speak now');
 
-    // Use Whisper (MediaRecorder) if available, else Web Speech API
-    if (whisperAvailable && audioStream) {
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-          ? 'audio/webm'
-          : '';
-
-      const opts = mimeType ? { mimeType } : {};
-      mediaRecorder = new MediaRecorder(audioStream, opts);
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunks.push(e.data);
-      };
-
-      mediaRecorder.onstop = async () => {
-        state.listening = false;
-        statusDot.classList.remove('listening');
-        beepStopListen();
-
-        if (audioChunks.length === 0) {
-          setStatus('ready', 'No audio captured');
-          speak('I didn\'t hear anything. Try again.');
-          return;
-        }
-
-        const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-        audioChunks = [];
-
-        setStatus('busy', 'Transcribing…');
-        try {
-          const resp = await fetch(`${API_BASE}/transcribe`, {
-            method: 'POST',
-            headers: { 'Content-Type': blob.type },
-            body: blob,
-          });
-          if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
-          const data = await resp.json();
-          const transcript = (data.text || '').trim();
-
-          if (!transcript || transcript === '[BLANK_AUDIO]') {
-            setStatus('ready', 'No speech detected');
-            speak('I didn\'t catch that. Try again.');
-            return;
-          }
-
-          setStatus('ready', `Heard: "${transcript}"`);
-          handleVoiceQuestion(transcript);
-        } catch (err) {
-          errorTone();
-          setStatus('error', 'Transcription failed');
-          speak('Sorry, I could not understand the audio. Please try again.');
-        }
-      };
-
-      mediaRecorder.onerror = () => {
-        state.listening = false;
-        statusDot.classList.remove('listening');
-        errorTone();
-        setStatus('error', 'Recording error');
-      };
-
-      mediaRecorder.start(250);
-    } else if (webSpeechRecognition) {
-      // Fallback: browser speech recognition
-      try {
-        webSpeechRecognition.start();
-      } catch (e) {
-        state.listening = false;
-        setStatus('error', 'Could not start speech recognition');
-      }
+    try {
+      recognition.start();
+    } catch (e) {
+      state.listening = false;
+      setStatus('error', 'Could not start microphone');
     }
   }
 
   function stopListening() {
-    if (whisperAvailable && mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop();
-    } else if (webSpeechRecognition && state.listening) {
-      webSpeechRecognition.stop();
+    if (recognition && state.listening) {
+      recognition.stop();
+      state.listening = false;
     }
-    state.listening = false;
   }
 
   // -----------------------------------------------------------------------
@@ -756,46 +673,34 @@ html, body {
   async function init() {
     setStatus('busy', 'Starting…');
 
-    // Request camera (video only — mic requested separately)
     const camOk = await initCamera();
     if (!camOk) return;
 
-    // Request microphone for STT
-    const micOk = await initSTT();
-    if (!micOk) {
-      setStatus('ready', 'Ready (no mic — voice input disabled)');
+    const sttOk = initSTT();
+    if (!sttOk) {
+      setStatus('ready', 'Ready (no voice input)');
     }
 
-    // Health check — discover which local services are running
+    // Health check — is llama-server running?
     try {
       const resp = await fetch(`${API_BASE}/health`);
       const data = await resp.json();
-      const llmOk = data.llama_server && data.llama_server.connected;
-      const sttOk = data.whisper_server && data.whisper_server.connected;
-      whisperAvailable = sttOk;
-
-      if (!llmOk) {
-        setStatus('error', 'LLM not running — start llama-server first');
+      if (!data.llama_server || !data.llama_server.connected) {
+        setStatus('error', 'LLM not running');
         speak('Warning: the language model is not running. Start llama-server in Termux first.');
         return;
       }
-
-      const sttLabel = sttOk ? 'Whisper' : (webSpeechRecognition ? 'browser' : 'none');
-      setStatus('ready', `Ready — LLM ✓  STT: ${sttLabel}`);
     } catch (e) {
       setStatus('error', 'Server not reachable');
-      speak('Cannot reach the Atlas Sight server. Make sure it is running in Termux.');
+      speak('Cannot reach the server. Make sure start dot sh is running in Termux.');
       return;
     }
 
-    // Welcome message
+    setStatus('ready', 'Ready — double-tap to describe');
     speak(
-      'Atlas Sight ready. ' +
-      'Everything is running on your phone. ' +
-      'Double-tap anywhere to describe what you see. ' +
-      'Long press to ask a question. ' +
-      'Swipe right for text reading mode. ' +
-      'Swipe left to repeat.'
+      'Atlas Sight ready. Everything runs on your phone. ' +
+      'Double-tap to describe. Long press to ask a question. ' +
+      'Swipe right for text mode. Swipe left to repeat.'
     );
   }
 
