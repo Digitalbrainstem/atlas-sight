@@ -54,9 +54,9 @@ class MainActivity : ComponentActivity() {
         modelDownloader = ModelDownloader(this)
         permissions = Permissions(this)
 
-        engine.initialize()
+        // DON'T initialize engine yet — wait until models are ready
 
-        // Observe engine state
+        // Observe engine state (once initialized)
         lifecycleScope.launch {
             engine.statusText.collectLatest { text ->
                 statusText.value = text
@@ -92,7 +92,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (::engine.isInitialized) {
+        // Only route gestures after engine is fully ready
+        if (::engine.isInitialized && isReady.value) {
             engine.gestureHandler.onTouchEvent(ev)
         }
         return super.dispatchTouchEvent(ev)
@@ -154,9 +155,13 @@ class MainActivity : ComponentActivity() {
                 isDownloading.value = false
                 if (!success) {
                     statusText.value = "Model download failed. Please check internet and restart."
+                    announce("Model download failed. Please check your internet connection and restart the app.")
                     return@launch
                 }
             }
+
+            // NOW initialize engine (models are downloaded)
+            engine.initialize()
 
             // Start all subsystems
             engine.cameraManager.start(this@MainActivity)

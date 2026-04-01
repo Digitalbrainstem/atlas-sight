@@ -140,20 +140,47 @@ class ModelDownloader(private val context: Context) {
             val url = URL(model.url)
             val connection = url.openConnection() as HttpURLConnection
             connection.connectTimeout = 30000
-            connection.readTimeout = 30000
+            connection.readTimeout = 60000
             connection.requestMethod = "GET"
+            connection.instanceFollowRedirects = true
+            // HuggingFace requires a user-agent
+            connection.setRequestProperty("User-Agent", "AtlasSight/1.0")
 
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+            // Follow redirects manually for HTTPS->HTTPS redirects
+            var finalConnection = connection
+            var redirects = 0
+            while (redirects < 5) {
+                val code = finalConnection.responseCode
+                if (code == HttpURLConnection.HTTP_MOVED_TEMP ||
+                    code == HttpURLConnection.HTTP_MOVED_PERM ||
+                    code == HttpURLConnection.HTTP_SEE_OTHER ||
+                    code == 307 || code == 308) {
+                    val location = finalConnection.getHeaderField("Location") ?: break
+                    finalConnection.disconnect()
+                    val redirectUrl = URL(location)
+                    finalConnection = redirectUrl.openConnection() as HttpURLConnection
+                    finalConnection.connectTimeout = 30000
+                    finalConnection.readTimeout = 60000
+                    finalConnection.instanceFollowRedirects = true
+                    finalConnection.setRequestProperty("User-Agent", "AtlasSight/1.0")
+                    redirects++
+                } else {
+                    break
+                }
+            }
+
+            if (finalConnection.responseCode != HttpURLConnection.HTTP_OK) {
+                onAnnounce("Server returned error ${finalConnection.responseCode} for ${model.displayName}.")
                 return@withContext false
             }
 
-            val totalSize = connection.contentLengthLong
+            val totalSize = finalConnection.contentLengthLong
             var downloaded = 0L
             var lastAnnouncedPercent = 0
 
-            connection.inputStream.use { input ->
+            finalConnection.inputStream.use { input ->
                 FileOutputStream(tempFile).use { output ->
-                    val buffer = ByteArray(8192)
+                    val buffer = ByteArray(65536)
                     var read: Int
                     while (input.read(buffer).also { read = it } != -1) {
                         output.write(buffer, 0, read)
