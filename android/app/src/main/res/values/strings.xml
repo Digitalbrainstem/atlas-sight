@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Atlas Sight</string>
+    <string name="status_initializing">Initializing Atlas Sight…</string>
+    <string name="status_ready">Atlas Sight ready. Double-tap or say Hey Atlas to begin.</string>
+    <string name="status_downloading">Downloading AI models…</string>
+    <string name="status_listening">Listening…</string>
+    <string name="status_processing">Processing…</string>
+    <string name="status_error">Something went wrong. Please try again.</string>
+    <string name="btn_activate">Activate Atlas</string>
+    <string name="btn_activate_desc">Large button. Double-tap to describe what\'s in front of you.</string>
+    <string name="mode_explore">Explore mode</string>
+    <string name="mode_read">Read mode</string>
+    <string name="mode_navigate">Navigate mode</string>
+    <string name="mode_identify">Identify mode</string>
+    <string name="permission_camera_title">Camera access needed</string>
+    <string name="permission_camera_rationale">Atlas Sight needs your camera to see the world for you.</string>
+    <string name="permission_mic_title">Microphone access needed</string>
+    <string name="permission_mic_rationale">Atlas Sight needs your microphone for voice commands.</string>
+</resources>

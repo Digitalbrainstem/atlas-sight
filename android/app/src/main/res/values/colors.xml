@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="dark_slate">#FF0F172A</color>
+    <color name="frost_cyan">#FF22D3EE</color>
+    <color name="aurora_purple">#FFA78BFA</color>
+    <color name="pure_white">#FFFFFFFF</color>
+    <color name="light_gray">#FFE2E8F0</color>
+    <color name="warning_amber">#FFFBBF24</color>
+    <color name="danger_red">#FFEF4444</color>
+    <color name="success_green">#FF22C55E</color>
+</resources>
