@@ -96,8 +96,8 @@ class SpeechRecognizer(private val context: Context) {
     fun stopListening() {
         isListening = false
         job?.cancel()
-        audioRecord?.stop()
-        audioRecord?.release()
+        try { audioRecord?.stop() } catch (_: Exception) { }
+        try { audioRecord?.release() } catch (_: Exception) { }
         audioRecord = null
     }
 

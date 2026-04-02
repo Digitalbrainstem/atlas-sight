@@ -114,13 +114,13 @@ class SpeechSynthesizer(private val context: Context) {
 
     fun speakImmediate(text: String, speedProfile: SpeedProfile = SpeedProfile.ALERT) {
         speechQueue.clear()
-        currentTrack?.stop()
+        try { currentTrack?.stop() } catch (_: Exception) { }
         speak(text, priority = 0, speedProfile = speedProfile)
     }
 
     fun stop() {
         speechQueue.clear()
-        currentTrack?.stop()
+        try { currentTrack?.stop() } catch (_: Exception) { }
         isSpeaking = false
     }
 
@@ -203,15 +203,17 @@ class SpeechSynthesizer(private val context: Context) {
             .build()
 
         currentTrack = track
-        track.write(pcm, 0, pcm.size)
-        track.play()
+        try {
+            track.write(pcm, 0, pcm.size)
+            track.play()
 
-        // Wait for playback to finish
-        val durationMs = (pcm.size.toLong() * 1000L) / rate
-        Thread.sleep(durationMs + 50)
-
-        track.stop()
-        track.release()
-        currentTrack = null
+            // Wait for playback to finish
+            val durationMs = (pcm.size.toLong() * 1000L) / rate
+            Thread.sleep(durationMs + 50)
+        } finally {
+            try { track.stop() } catch (_: Exception) { }
+            try { track.release() } catch (_: Exception) { }
+            currentTrack = null
+        }
     }
 }

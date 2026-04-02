@@ -1,6 +1,7 @@
 package dev.atlascortex.sight.core
 
 import android.content.Context
+import android.util.Log
 import dev.atlascortex.sight.core.modes.*
 import dev.atlascortex.sight.platform.*
 import kotlinx.coroutines.*
@@ -11,6 +12,10 @@ import kotlinx.coroutines.flow.*
  * Routes gestures/voice → modes → vision → speech/haptic/audio.
  */
 class SightEngine(private val context: Context) {
+
+    companion object {
+        private const val TAG = "SightEngine"
+    }
 
     // Core
     val config = Config(context)
@@ -119,15 +124,16 @@ class SightEngine(private val context: Context) {
     }
 
     fun shutdown() {
+        Log.i(TAG, "Shutting down SightEngine")
         processingJob?.cancel()
         scope.cancel()
-        cameraManager.stop()
-        speechSynthesizer.shutdown()
-        speechRecognizer.shutdown()
-        wakeWordDetector.shutdown()
-        gestureHandler.stop()
-        orientationHelper.stop()
-        visionModel.release()
+        try { cameraManager.stop() } catch (e: Exception) { Log.w(TAG, "Camera stop error", e) }
+        try { speechSynthesizer.shutdown() } catch (e: Exception) { Log.w(TAG, "TTS shutdown error", e) }
+        try { speechRecognizer.shutdown() } catch (e: Exception) { Log.w(TAG, "STT shutdown error", e) }
+        try { wakeWordDetector.shutdown() } catch (e: Exception) { Log.w(TAG, "WakeWord shutdown error", e) }
+        try { gestureHandler.stop() } catch (e: Exception) { Log.w(TAG, "Gesture stop error", e) }
+        try { orientationHelper.stop() } catch (e: Exception) { Log.w(TAG, "Orientation stop error", e) }
+        try { visionModel.release() } catch (e: Exception) { Log.w(TAG, "VLM release error", e) }
     }
 
     // --- Command routing ---
@@ -270,6 +276,7 @@ class SightEngine(private val context: Context) {
 
     // --- Frame processing ---
 
+    @Volatile
     private var isProcessingFrame = false
     private var lastFrameTime = 0L
     private val frameIntervalMs = 3000L // Process one frame every 3 seconds max
@@ -293,7 +300,10 @@ class SightEngine(private val context: Context) {
                     SightMode.READ -> { /* Read mode triggered on-demand, not continuous */ }
                     SightMode.IDENTIFY -> { /* Identify triggered on-demand */ }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                Log.e(TAG, "Frame processing error", e)
                 speak("Something went wrong. Please try again.", 3)
             } finally {
                 isProcessingFrame = false

@@ -125,12 +125,24 @@ class AudioCues {
                 .build()
             track.write(samples, 0, samples.size)
             track.play()
-            // Release after playback completes
+            // Release after playback via marker; schedule fallback release in case marker never fires
             track.setNotificationMarkerPosition(samples.size)
             track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
-                override fun onMarkerReached(t: AudioTrack) { t.release() }
+                override fun onMarkerReached(t: AudioTrack) {
+                    try { t.stop() } catch (_: Exception) { }
+                    try { t.release() } catch (_: Exception) { }
+                }
                 override fun onPeriodicNotification(t: AudioTrack) {}
             })
+            // Fallback: release after estimated duration + generous margin
+            val durationMs = (samples.size.toLong() * 1000L) / SAMPLE_RATE + 500
+            Thread {
+                try {
+                    Thread.sleep(durationMs)
+                    track.stop()
+                } catch (_: Exception) { }
+                try { track.release() } catch (_: Exception) { }
+            }.start()
         } catch (_: Exception) {
             // Audio playback is best-effort — never crash
         }

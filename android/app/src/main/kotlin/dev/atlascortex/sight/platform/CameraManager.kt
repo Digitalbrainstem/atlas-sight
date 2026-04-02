@@ -44,6 +44,7 @@ class CameraManager(private val context: Context) {
         private set
 
     fun start(lifecycleOwner: LifecycleOwner) {
+        if (isRunning) return // Prevent double-start
         val providerFuture = ProcessCameraProvider.getInstance(context)
         providerFuture.addListener({
             try {
@@ -58,7 +59,7 @@ class CameraManager(private val context: Context) {
 
     fun stop() {
         isRunning = false
-        cameraProvider?.unbindAll()
+        try { cameraProvider?.unbindAll() } catch (_: Exception) { }
     }
 
     /** Capture a single frame as JPEG bytes. */

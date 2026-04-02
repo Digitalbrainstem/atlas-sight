@@ -4,6 +4,8 @@ import android.content.Context
 import dev.atlascortex.sight.core.*
 import dev.atlascortex.sight.vlm.VisionInferenceEngine
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -17,6 +19,9 @@ class VisionModel(private val context: Context) {
     private val engine = VisionInferenceEngine()
     private var isLoaded = false
     private val modelDir: File get() = File(context.filesDir, "models/qwen3-vl")
+
+    // Serialize all native VLM calls — C++ global state is NOT thread-safe
+    private val inferenceMutex = Mutex()
 
     fun isReady(): Boolean = isLoaded
 
@@ -68,7 +73,9 @@ class VisionModel(private val context: Context) {
             Verbosity.NORMAL -> 192
             Verbosity.DETAILED -> 384
         }
-        val result = engine.describeImage(jpegBytes, prompt, maxTokens)
+        val result = inferenceMutex.withLock {
+            engine.describeImage(jpegBytes, prompt, maxTokens)
+        }
         val objects = extractObjects(result)
         SceneDescription(
             text = result.ifBlank { "Unable to process the image right now." },
@@ -81,20 +88,26 @@ class VisionModel(private val context: Context) {
     suspend fun detectObjects(jpegBytes: ByteArray): List<DetectedObject> =
         withContext(Dispatchers.Default) {
             val prompt = "List every object you can see with its position. Format: object_name (position)"
-            val result = engine.describeImage(jpegBytes, prompt, 256)
+            val result = inferenceMutex.withLock {
+                engine.describeImage(jpegBytes, prompt, 256)
+            }
             extractObjects(result)
         }
 
     /** Read text from the image (OCR). */
     suspend fun readText(jpegBytes: ByteArray): String = withContext(Dispatchers.Default) {
         val prompt = "Read all visible text in this image, in natural reading order (top to bottom, left to right). Only output the text content."
-        engine.describeImage(jpegBytes, prompt, 384)
+        inferenceMutex.withLock {
+            engine.describeImage(jpegBytes, prompt, 384)
+        }
     }
 
     /** Answer a follow-up question about the image. */
     suspend fun askAboutImage(jpegBytes: ByteArray, question: String): String =
         withContext(Dispatchers.Default) {
-            engine.describeImage(jpegBytes, question, 256)
+            inferenceMutex.withLock {
+                engine.describeImage(jpegBytes, question, 256)
+            }
         }
 
     fun release() {

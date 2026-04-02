@@ -109,18 +109,18 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::engine.isInitialized && isReady.value) {
-            engine.gestureHandler.start()
-            engine.orientationHelper.start()
-            engine.cameraManager.start(this)
+            try { engine.gestureHandler.start() } catch (_: Exception) { }
+            try { engine.orientationHelper.start() } catch (_: Exception) { }
+            try { engine.cameraManager.start(this) } catch (_: Exception) { }
         }
     }
 
     override fun onPause() {
         super.onPause()
         if (::engine.isInitialized) {
-            engine.gestureHandler.stop()
-            engine.orientationHelper.stop()
-            engine.cameraManager.stop()
+            try { engine.gestureHandler.stop() } catch (_: Exception) { }
+            try { engine.orientationHelper.stop() } catch (_: Exception) { }
+            try { engine.cameraManager.stop() } catch (_: Exception) { }
         }
     }
 
