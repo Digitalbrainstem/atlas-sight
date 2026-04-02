@@ -270,11 +270,21 @@ class SightEngine(private val context: Context) {
 
     // --- Frame processing ---
 
+    private var isProcessingFrame = false
+    private var lastFrameTime = 0L
+    private val frameIntervalMs = 3000L // Process one frame every 3 seconds max
+
     private fun processFrame(jpegBytes: ByteArray) {
         if (!config.continuousMode.value) return
         if (!visionModel.isReady()) return
+        if (isProcessingFrame) return // Skip if previous frame still processing
+
+        val now = System.currentTimeMillis()
+        if (now - lastFrameTime < frameIntervalMs) return // Rate limit
+        lastFrameTime = now
 
         val mode = modeManager.currentMode.value
+        isProcessingFrame = true
         scope.launch {
             try {
                 when (mode) {
@@ -285,6 +295,8 @@ class SightEngine(private val context: Context) {
                 }
             } catch (e: Exception) {
                 speak("Something went wrong. Please try again.", 3)
+            } finally {
+                isProcessingFrame = false
             }
         }
     }
