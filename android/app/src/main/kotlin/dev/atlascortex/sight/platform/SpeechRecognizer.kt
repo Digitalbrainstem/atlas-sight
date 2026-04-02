@@ -52,10 +52,26 @@ class SpeechRecognizer(private val context: Context) {
             val decoderFile = File(modelDir, "tiny.en-decoder.int8.onnx")
             val tokensFile = File(modelDir, "tiny.en-tokens.txt")
 
-            if (!encoderFile.exists() || !decoderFile.exists() || !tokensFile.exists()) {
-                Log.w(TAG, "Whisper model files not found in ${modelDir.absolutePath}")
+            Log.i(TAG, "Checking Whisper model files in ${modelDir.absolutePath}")
+            if (modelDir.exists()) {
+                val contents = modelDir.listFiles()?.map { "${it.name} (${it.length()} bytes)" }
+                Log.i(TAG, "Directory contents: $contents")
+            } else {
+                Log.e(TAG, "Model directory does not exist: ${modelDir.absolutePath}")
                 return@withContext false
             }
+
+            val missing = mutableListOf<String>()
+            if (!encoderFile.exists()) missing.add("encoder (${encoderFile.name})")
+            if (!decoderFile.exists()) missing.add("decoder (${decoderFile.name})")
+            if (!tokensFile.exists()) missing.add("tokens (${tokensFile.name})")
+
+            if (missing.isNotEmpty()) {
+                Log.e(TAG, "Missing Whisper model files: $missing")
+                return@withContext false
+            }
+
+            Log.i(TAG, "Model files found — encoder: ${encoderFile.length() / 1_000_000}MB, decoder: ${decoderFile.length() / 1_000_000}MB, tokens: ${tokensFile.length()} bytes")
 
             val whisperConfig = OfflineWhisperModelConfig(
                 encoder = encoderFile.absolutePath,
@@ -71,8 +87,9 @@ class SpeechRecognizer(private val context: Context) {
             )
             val config = OfflineRecognizerConfig(modelConfig = modelConfig)
 
+            Log.i(TAG, "Creating OfflineRecognizer…")
             recognizer = OfflineRecognizer(config = config)
-            Log.i(TAG, "Sherpa-ONNX Whisper STT initialized")
+            Log.i(TAG, "Sherpa-ONNX Whisper STT initialized successfully")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize Whisper STT", e)
@@ -82,11 +99,21 @@ class SpeechRecognizer(private val context: Context) {
     }
 
     fun startListening() {
-        if (isListening) return
-        if (recognizer == null) return
+        if (isListening) {
+            Log.d(TAG, "startListening: already listening")
+            return
+        }
+        if (recognizer == null) {
+            Log.w(TAG, "startListening: recognizer not initialized")
+            return
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED) return
+            != PackageManager.PERMISSION_GRANTED) {
+            Log.e(TAG, "startListening: RECORD_AUDIO permission not granted")
+            return
+        }
 
+        Log.i(TAG, "Starting microphone listening…")
         isListening = true
         job = scope.launch {
             recordAndRecognize()
@@ -124,11 +151,13 @@ class SpeechRecognizer(private val context: Context) {
         }
 
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "AudioRecord failed to initialize (state=${audioRecord?.state})")
             isListening = false
             return
         }
 
         audioRecord?.startRecording()
+        Log.i(TAG, "AudioRecord started (bufferSize=$bufferSize, sampleRate=$SAMPLE_RATE)")
 
         val chunkSamples = SAMPLE_RATE * CHUNK_SECONDS
         val accumulator = mutableListOf<Float>()

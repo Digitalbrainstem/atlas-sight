@@ -1,6 +1,7 @@
 package dev.atlascortex.sight
 
 import android.os.Bundle
+import android.util.Log
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
 import androidx.activity.ComponentActivity
@@ -22,6 +23,10 @@ import kotlinx.coroutines.launch
  * TalkBack + announceForAccessibility() for all state changes.
  */
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        private const val TAG = "MainActivity"
+    }
 
     private lateinit var engine: SightEngine
     private lateinit var modelDownloader: ModelDownloader
@@ -148,6 +153,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             // Check models first
             if (!modelDownloader.allModelsReady()) {
+                Log.i(TAG, "Models not ready — starting download")
                 isDownloading.value = true
                 // Observe download progress
                 launch {
@@ -165,14 +171,20 @@ class MainActivity : ComponentActivity() {
                     announce("Model download failed. Please check your internet connection and restart the app.")
                     return@launch
                 }
+            } else {
+                Log.i(TAG, "All models already present")
             }
 
             // NOW initialize engine (models are downloaded)
+            Log.i(TAG, "Initializing SightEngine…")
             engine.initialize()
 
             // Start all subsystems
+            Log.i(TAG, "Starting camera…")
             engine.cameraManager.start(this@MainActivity)
+            Log.i(TAG, "Starting subsystems…")
             engine.startSubsystems()
+            Log.i(TAG, "Engine startup complete")
         }
     }
 

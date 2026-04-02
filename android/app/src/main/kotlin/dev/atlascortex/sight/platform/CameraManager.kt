@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.util.Log
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
@@ -25,6 +26,7 @@ import java.util.concurrent.Executors
 class CameraManager(private val context: Context) {
 
     companion object {
+        private const val TAG = "CameraManager"
         const val TARGET_WIDTH = 640
         const val TARGET_HEIGHT = 480
     }
@@ -43,21 +45,29 @@ class CameraManager(private val context: Context) {
     var isRunning: Boolean = false
         private set
 
+    @Volatile
+    private var frameCount = 0L
+
     fun start(lifecycleOwner: LifecycleOwner) {
-        if (isRunning) return // Prevent double-start
+        if (isRunning) {
+            Log.d(TAG, "start() called but already running")
+            return
+        }
+        Log.i(TAG, "Starting camera…")
         val providerFuture = ProcessCameraProvider.getInstance(context)
         providerFuture.addListener({
             try {
                 val provider = providerFuture.get()
                 cameraProvider = provider
                 bindCamera(provider, lifecycleOwner)
-            } catch (_: Exception) {
-                // Camera init failure — app degrades to voice-only
+            } catch (e: Exception) {
+                Log.e(TAG, "Camera provider init failed", e)
             }
         }, ContextCompat.getMainExecutor(context))
     }
 
     fun stop() {
+        Log.i(TAG, "Stopping camera (frames emitted: $frameCount)")
         isRunning = false
         try { cameraProvider?.unbindAll() } catch (_: Exception) { }
     }
@@ -93,8 +103,9 @@ class CameraManager(private val context: Context) {
                 imageAnalysis,
             )
             isRunning = true
-        } catch (_: Exception) {
-            // Camera bind failed — graceful degradation
+            Log.i(TAG, "Camera bound successfully — frames will flow via SharedFlow")
+        } catch (e: Exception) {
+            Log.e(TAG, "Camera bind failed", e)
             isRunning = false
         }
     }
@@ -103,8 +114,17 @@ class CameraManager(private val context: Context) {
         try {
             val jpeg = imageProxyToJpeg(imageProxy)
             if (jpeg != null) {
-                _frames.tryEmit(jpeg)
+                val emitted = _frames.tryEmit(jpeg)
+                frameCount++
+                if (frameCount == 1L) {
+                    Log.i(TAG, "First camera frame emitted (${jpeg.size} bytes, ${imageProxy.width}x${imageProxy.height})")
+                }
+                if (frameCount % 300 == 0L) {
+                    Log.d(TAG, "Camera frames emitted: $frameCount (latest ${jpeg.size} bytes, emitted=$emitted)")
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Frame processing error", e)
         } finally {
             imageProxy.close()
         }

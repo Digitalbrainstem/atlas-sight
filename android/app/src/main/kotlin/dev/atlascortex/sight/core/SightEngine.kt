@@ -91,15 +91,25 @@ class SightEngine(private val context: Context) {
 
     suspend fun startSubsystems() {
         _statusText.value = "Starting voice engine…"
+        Log.i(TAG, "startSubsystems() — beginning subsystem initialization")
 
         // Initialize all subsystems
+        Log.i(TAG, "Initializing TTS…")
         val ttsReady = speechSynthesizer.initialize()
+        Log.i(TAG, "TTS ready=$ttsReady")
+
+        Log.i(TAG, "Initializing STT…")
         val sttReady = speechRecognizer.initialize()
+        Log.i(TAG, "STT ready=$sttReady")
+
         wakeWordDetector.initialize()
 
         // Start mic capture so voice commands work
         if (sttReady) {
             speechRecognizer.startListening()
+            Log.i(TAG, "STT listening started")
+        } else {
+            Log.w(TAG, "STT not ready — voice commands will not work")
         }
 
         if (ttsReady) {
@@ -107,9 +117,16 @@ class SightEngine(private val context: Context) {
                 "Atlas Sight is ready. Double-tap or say Hey Atlas to begin.",
                 priority = 1,
             )
+        } else {
+            Log.w(TAG, "TTS not ready — voice output will not work")
         }
 
+        Log.i(TAG, "Loading VLM (this may take 10-30 seconds)…")
         val visionReady = visionModel.load()
+        Log.i(TAG, "VLM ready=$visionReady")
+
+        val cameraRunning = cameraManager.isRunning
+        Log.i(TAG, "Subsystem summary: tts=$ttsReady stt=$sttReady vlm=$visionReady camera=$cameraRunning")
 
         _statusText.value = when {
             visionReady && ttsReady -> "Atlas Sight ready. Double-tap or say Hey Atlas."
@@ -118,9 +135,17 @@ class SightEngine(private val context: Context) {
             else -> "Voice engine not available. Touch gestures active."
         }
 
+        if (!visionReady && ttsReady) {
+            speechSynthesizer.speak(
+                "Vision model failed to load. Voice commands and gestures are still active.",
+                priority = 2,
+            )
+        }
+
         gestureHandler.start()
         orientationHelper.start()
         _isReady.value = true
+        Log.i(TAG, "startSubsystems() complete — isReady=true")
     }
 
     fun shutdown() {
@@ -139,11 +164,13 @@ class SightEngine(private val context: Context) {
     // --- Command routing ---
 
     fun handleVoiceInput(text: String) {
+        Log.d(TAG, "Voice input: '$text'")
         val isWakeWord = wakeWordDetector.checkTranscription(text)
         val command = if (isWakeWord) wakeWordDetector.stripWakeWord(text) else text
         if (command.isBlank()) return
 
         val match = commandParser.parse(command)
+        Log.d(TAG, "Parsed intent=${match.intent} confidence=${match.confidence}")
         if (match.confidence < 0.5f) return
 
         hapticEngine.vibrate(HapticPattern.ACKNOWLEDGE)
@@ -152,6 +179,7 @@ class SightEngine(private val context: Context) {
     }
 
     fun handleGesture(gesture: GestureHandler.Gesture) {
+        Log.d(TAG, "Gesture: $gesture")
         hapticEngine.vibrate(HapticPattern.ACKNOWLEDGE)
 
         when (gesture) {
@@ -283,7 +311,10 @@ class SightEngine(private val context: Context) {
 
     private fun processFrame(jpegBytes: ByteArray) {
         if (!config.continuousMode.value) return
-        if (!visionModel.isReady()) return
+        if (!visionModel.isReady()) {
+            Log.v(TAG, "processFrame skipped — VLM not ready")
+            return
+        }
         if (isProcessingFrame) return // Skip if previous frame still processing
 
         val now = System.currentTimeMillis()
@@ -292,6 +323,7 @@ class SightEngine(private val context: Context) {
 
         val mode = modeManager.currentMode.value
         isProcessingFrame = true
+        Log.d(TAG, "Processing frame in $mode mode (${jpegBytes.size} bytes)")
         scope.launch {
             try {
                 when (mode) {
@@ -312,6 +344,7 @@ class SightEngine(private val context: Context) {
     }
 
     private suspend fun processExploreFrame(jpegBytes: ByteArray) {
+        Log.d(TAG, "processExploreFrame: ${jpegBytes.size} bytes")
         val scene = visionModel.describeScene(jpegBytes, config.verbosity.value)
         // Always check obstacles first (safety)
         val warnings = exploreMode.processObstacles(scene.objects)
@@ -326,6 +359,7 @@ class SightEngine(private val context: Context) {
     }
 
     private suspend fun processNavigateFrame(jpegBytes: ByteArray) {
+        Log.d(TAG, "processNavigateFrame: ${jpegBytes.size} bytes")
         val objects = visionModel.detectObjects(jpegBytes)
         val alerts = navigateMode.processObstacles(objects)
         for (alert in alerts) {
@@ -338,42 +372,85 @@ class SightEngine(private val context: Context) {
     // --- Triggered actions ---
 
     private fun triggerDescribe() {
+        if (!visionModel.isReady()) {
+            Log.w(TAG, "triggerDescribe: VLM not ready")
+            speak("Vision is still loading. Please wait.", 2)
+            return
+        }
         speak("Looking around…", 3)
         scope.launch {
             try {
-                val frame = captureCurrentFrame() ?: return@launch speak("Camera not available.", 2)
+                val frame = captureCurrentFrame()
+                if (frame == null) {
+                    Log.w(TAG, "triggerDescribe: no camera frame within timeout")
+                    speak("Camera not available.", 2)
+                    return@launch
+                }
+                Log.d(TAG, "triggerDescribe: got frame ${frame.size} bytes, running VLM…")
                 val scene = visionModel.describeScene(frame, config.verbosity.value)
-                speak(scene.text, 4)
-            } catch (_: Exception) {
+                Log.d(TAG, "triggerDescribe: VLM returned ${scene.text.length} chars")
+                if (scene.text.isBlank()) {
+                    speak("Could not understand the scene. Please try again.", 3)
+                } else {
+                    speak(scene.text, 4)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "triggerDescribe failed", e)
                 speak("Unable to describe the scene right now.", 3)
             }
         }
     }
 
     private fun triggerRead() {
+        if (!visionModel.isReady()) {
+            Log.w(TAG, "triggerRead: VLM not ready")
+            speak("Vision is still loading. Please wait.", 2)
+            return
+        }
         audioCues.play(AudioCueType.CHIME)
         speak("Reading text…", 3)
         scope.launch {
             try {
-                val frame = captureCurrentFrame() ?: return@launch speak("Camera not available.", 2)
+                val frame = captureCurrentFrame()
+                if (frame == null) {
+                    Log.w(TAG, "triggerRead: no camera frame within timeout")
+                    speak("Camera not available.", 2)
+                    return@launch
+                }
+                Log.d(TAG, "triggerRead: got frame ${frame.size} bytes, running OCR…")
                 val text = visionModel.readText(frame)
+                Log.d(TAG, "triggerRead: VLM returned ${text.length} chars")
                 val result = readMode.processText(text) ?: readMode.noTextFound()
                 speak(result, 4)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e(TAG, "triggerRead failed", e)
                 speak("Unable to read text right now.", 3)
             }
         }
     }
 
     private fun triggerIdentify() {
+        if (!visionModel.isReady()) {
+            Log.w(TAG, "triggerIdentify: VLM not ready")
+            speak("Vision is still loading. Please wait.", 2)
+            return
+        }
         speak("Identifying…", 3)
         scope.launch {
             try {
-                val frame = captureCurrentFrame() ?: return@launch speak("Camera not available.", 2)
+                val frame = captureCurrentFrame()
+                if (frame == null) {
+                    Log.w(TAG, "triggerIdentify: no camera frame within timeout")
+                    speak("Camera not available.", 2)
+                    return@launch
+                }
+                Log.d(TAG, "triggerIdentify: got frame ${frame.size} bytes")
                 val scene = visionModel.describeScene(frame, Verbosity.DETAILED)
+                Log.d(TAG, "triggerIdentify: VLM returned ${scene.text.length} chars")
                 val result = identifyMode.formatIdentification(scene)
                 speak(result, 4)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e(TAG, "triggerIdentify failed", e)
                 speak("Unable to identify right now.", 3)
             }
         }
@@ -403,10 +480,18 @@ class SightEngine(private val context: Context) {
     }
 
     private suspend fun captureCurrentFrame(): ByteArray? {
+        if (!cameraManager.isRunning) {
+            Log.w(TAG, "captureCurrentFrame: camera is not running")
+            return null
+        }
         // Wait briefly for next frame from camera
-        return withTimeoutOrNull(500) {
+        val frame = withTimeoutOrNull(1000) {
             cameraManager.frames.first()
         }
+        if (frame == null) {
+            Log.w(TAG, "captureCurrentFrame: timed out waiting for frame")
+        }
+        return frame
     }
 
     private fun onModeChanged(old: SightMode, new: SightMode) {

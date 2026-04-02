@@ -9,13 +9,16 @@ package dev.atlascortex.sight.vlm
 class VisionInferenceEngine {
 
     companion object {
+        private const val TAG = "VisionInferenceEngine"
         private var libraryLoaded = false
 
         @Synchronized
         fun ensureLoaded() {
             if (!libraryLoaded) {
+                android.util.Log.i(TAG, "Loading native library 'atlas-sight-vlm'…")
                 System.loadLibrary("atlas-sight-vlm")
                 libraryLoaded = true
+                android.util.Log.i(TAG, "Native library loaded successfully")
             }
         }
     }
@@ -34,7 +37,9 @@ class VisionInferenceEngine {
     /** Initialise llama backends.  Call once before [loadModel]. */
     fun init(nativeLibDir: String) {
         ensureLoaded()
+        android.util.Log.i(TAG, "Calling nativeInit($nativeLibDir)")
         nativeInit(nativeLibDir)
+        android.util.Log.i(TAG, "nativeInit complete")
     }
 
     /**
@@ -45,7 +50,9 @@ class VisionInferenceEngine {
      * @return true if both the LLM and vision encoder loaded successfully.
      */
     fun loadModel(modelPath: String, mmprojPath: String, nThreads: Int = 4): Boolean {
+        android.util.Log.i(TAG, "Loading model: llm=$modelPath mmproj=$mmprojPath threads=$nThreads")
         modelLoaded = nativeLoadModel(modelPath, mmprojPath, nThreads)
+        android.util.Log.i(TAG, "Model loaded: $modelLoaded")
         return modelLoaded
     }
 
@@ -57,8 +64,14 @@ class VisionInferenceEngine {
      * @return generated text, or empty string on failure.
      */
     fun describeImage(jpegBytes: ByteArray, prompt: String, maxTokens: Int = 256): String {
-        if (!modelLoaded) return ""
-        return nativeInfer(jpegBytes, prompt, maxTokens)
+        if (!modelLoaded) {
+            android.util.Log.w(TAG, "describeImage called but model not loaded")
+            return ""
+        }
+        android.util.Log.d(TAG, "nativeInfer: jpeg=${jpegBytes.size} bytes, prompt=${prompt.take(60)}…, maxTokens=$maxTokens")
+        val result = nativeInfer(jpegBytes, prompt, maxTokens)
+        android.util.Log.d(TAG, "nativeInfer returned: ${result.length} chars")
+        return result
     }
 
     /** Release all native resources.  The engine cannot be reused after this. */

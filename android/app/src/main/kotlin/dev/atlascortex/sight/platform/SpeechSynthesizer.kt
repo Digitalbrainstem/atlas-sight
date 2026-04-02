@@ -48,31 +48,40 @@ class SpeechSynthesizer(private val context: Context) {
     suspend fun initialize(): Boolean = withContext(Dispatchers.IO) {
         try {
             val modelDir = File(context.filesDir, "models/piper-tts")
+            Log.i(TAG, "Checking TTS model files in ${modelDir.absolutePath}")
+
             if (!modelDir.isDirectory) {
-                Log.w(TAG, "TTS model directory not found: ${modelDir.absolutePath}")
+                Log.e(TAG, "TTS model directory not found: ${modelDir.absolutePath}")
                 return@withContext false
             }
+
+            val contents = modelDir.listFiles()?.map {
+                if (it.isDirectory) "${it.name}/ (dir)" else "${it.name} (${it.length()} bytes)"
+            }
+            Log.i(TAG, "Directory contents: $contents")
 
             // Find the .onnx model file
             val modelFile = modelDir.listFiles()?.firstOrNull {
                 it.name.endsWith(".onnx") && !it.name.endsWith(".onnx.json")
             }
             if (modelFile == null || !modelFile.exists()) {
-                Log.w(TAG, "No .onnx model file found in ${modelDir.absolutePath}")
+                Log.e(TAG, "No .onnx model file found in ${modelDir.absolutePath}")
                 return@withContext false
             }
+            Log.i(TAG, "Found TTS model: ${modelFile.name} (${modelFile.length() / 1_000_000}MB)")
 
             val tokensFile = File(modelDir, "tokens.txt")
             if (!tokensFile.exists()) {
-                Log.w(TAG, "tokens.txt not found in ${modelDir.absolutePath}")
+                Log.e(TAG, "tokens.txt not found in ${modelDir.absolutePath}")
                 return@withContext false
             }
 
             val espeakDataDir = File(modelDir, "espeak-ng-data")
             if (!espeakDataDir.isDirectory) {
-                Log.w(TAG, "espeak-ng-data/ not found in ${modelDir.absolutePath}")
+                Log.e(TAG, "espeak-ng-data/ not found in ${modelDir.absolutePath}")
                 return@withContext false
             }
+            Log.i(TAG, "espeak-ng-data entries: ${espeakDataDir.listFiles()?.size ?: 0}")
 
             val vitsConfig = OfflineTtsVitsModelConfig(
                 model = modelFile.absolutePath,
@@ -86,6 +95,7 @@ class SpeechSynthesizer(private val context: Context) {
             )
             val ttsConfig = OfflineTtsConfig(model = modelConfig)
 
+            Log.i(TAG, "Creating OfflineTts…")
             tts = OfflineTts(config = ttsConfig)
             sampleRate = tts!!.sampleRate()
             isInitialized = true

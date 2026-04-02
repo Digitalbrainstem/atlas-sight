@@ -251,6 +251,8 @@ class ModelDownloader(private val context: Context) {
      * end up directly inside [targetDir] rather than nested.
      */
     private fun extractTarBz2(tarBz2File: File, targetDir: File) {
+        var extractedCount = 0
+        var skippedCount = 0
         FileInputStream(tarBz2File).use { fis ->
             BufferedInputStream(fis).use { bis ->
                 BZip2CompressorInputStream(bis).use { bzIn ->
@@ -263,6 +265,8 @@ class ModelDownloader(private val context: Context) {
                             if (stripped.isEmpty() || stripped == entryName.trimEnd('/')) {
                                 // Top-level dir entry itself — skip
                                 if (entry.isDirectory && '/' !in entryName.trimEnd('/')) {
+                                    Log.d(TAG, "Skipping top-level dir: $entryName")
+                                    skippedCount++
                                     entry = tarIn.nextEntry
                                     continue
                                 }
@@ -270,6 +274,7 @@ class ModelDownloader(private val context: Context) {
 
                             val outputName = if ('/' in entryName) stripped else entryName
                             if (outputName.isBlank()) {
+                                skippedCount++
                                 entry = tarIn.nextEntry
                                 continue
                             }
@@ -278,17 +283,22 @@ class ModelDownloader(private val context: Context) {
 
                             // Guard against zip-slip
                             if (!outputFile.canonicalPath.startsWith(targetDir.canonicalPath)) {
+                                Log.w(TAG, "Zip-slip blocked: $entryName")
+                                skippedCount++
                                 entry = tarIn.nextEntry
                                 continue
                             }
 
                             if (entry.isDirectory) {
                                 outputFile.mkdirs()
+                                Log.d(TAG, "  mkdir: $outputName")
                             } else {
                                 outputFile.parentFile?.mkdirs()
                                 FileOutputStream(outputFile).use { fos ->
                                     tarIn.copyTo(fos, 65536)
                                 }
+                                Log.d(TAG, "  extract: $outputName (${outputFile.length()} bytes)")
+                                extractedCount++
                             }
 
                             entry = tarIn.nextEntry
@@ -297,6 +307,13 @@ class ModelDownloader(private val context: Context) {
                 }
             }
         }
-        Log.i(TAG, "Extracted ${tarBz2File.name} to ${targetDir.absolutePath}")
+        Log.i(TAG, "Extracted ${tarBz2File.name}: $extractedCount files, $skippedCount skipped")
+
+        // Log final directory contents for verification
+        val finalContents = targetDir.walkTopDown().filter { it.isFile }.map {
+            val rel = it.relativeTo(targetDir).path
+            "$rel (${it.length()} bytes)"
+        }.toList()
+        Log.i(TAG, "Final contents of ${targetDir.name}/: $finalContents")
     }
 }

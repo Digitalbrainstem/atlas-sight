@@ -1,6 +1,7 @@
 package dev.atlascortex.sight.platform
 
 import android.content.Context
+import android.util.Log
 import dev.atlascortex.sight.core.*
 import dev.atlascortex.sight.vlm.VisionInferenceEngine
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +17,10 @@ import java.io.File
  */
 class VisionModel(private val context: Context) {
 
+    companion object {
+        private const val TAG = "VisionModel"
+    }
+
     private val engine = VisionInferenceEngine()
     private var isLoaded = false
     private val modelDir: File get() = File(context.filesDir, "models/qwen3-vl")
@@ -27,32 +32,45 @@ class VisionModel(private val context: Context) {
 
     suspend fun load(): Boolean = withContext(Dispatchers.IO) {
         try {
+            Log.i(TAG, "load() — checking model files in ${modelDir.absolutePath}")
+            if (!modelDir.exists()) {
+                Log.e(TAG, "Model directory does not exist: ${modelDir.absolutePath}")
+                return@withContext false
+            }
+
+            val contents = modelDir.listFiles()?.map { "${it.name} (${it.length() / 1_000_000}MB)" }
+            Log.i(TAG, "Model directory contents: $contents")
+
             val modelFile = File(modelDir, "Qwen3-VL-2B-Instruct-Q4_K_M.gguf")
             val mmprojFile = File(modelDir, "mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf")
             if (!modelFile.exists()) {
-                android.util.Log.e("VisionModel", "LLM model not found: ${modelFile.absolutePath}")
+                Log.e(TAG, "LLM model not found: ${modelFile.absolutePath}")
                 return@withContext false
             }
             if (!mmprojFile.exists()) {
-                android.util.Log.e("VisionModel", "Vision encoder not found: ${mmprojFile.absolutePath}")
+                Log.e(TAG, "Vision encoder not found: ${mmprojFile.absolutePath}")
                 return@withContext false
             }
-            android.util.Log.i("VisionModel", "LLM: ${modelFile.length() / 1_000_000}MB, mmproj: ${mmprojFile.length() / 1_000_000}MB")
+            Log.i(TAG, "LLM: ${modelFile.length() / 1_000_000}MB, mmproj: ${mmprojFile.length() / 1_000_000}MB")
 
             val nativeLibDir = context.applicationInfo.nativeLibraryDir
+            Log.i(TAG, "Initializing native engine from $nativeLibDir")
             engine.init(nativeLibDir)
+            Log.i(TAG, "Native engine initialized")
 
             val nThreads = (Runtime.getRuntime().availableProcessors() - 2).coerceIn(2, 4)
-            android.util.Log.i("VisionModel", "Loading model with $nThreads threads...")
+            Log.i(TAG, "Loading model with $nThreads threads (available CPUs: ${Runtime.getRuntime().availableProcessors()})…")
+            val startTime = System.currentTimeMillis()
             isLoaded = engine.loadModel(modelFile.absolutePath, mmprojFile.absolutePath, nThreads)
-            android.util.Log.i("VisionModel", "Model load result: $isLoaded")
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.i(TAG, "Model load result: $isLoaded (took ${elapsed}ms)")
             isLoaded
         } catch (e: Exception) {
-            android.util.Log.e("VisionModel", "Model load failed: ${e.message}", e)
+            Log.e(TAG, "Model load failed with exception: ${e.message}", e)
             isLoaded = false
             false
         } catch (e: UnsatisfiedLinkError) {
-            android.util.Log.e("VisionModel", "Native library not found: ${e.message}", e)
+            Log.e(TAG, "Native library not found: ${e.message}", e)
             isLoaded = false
             false
         }
@@ -73,8 +91,15 @@ class VisionModel(private val context: Context) {
             Verbosity.NORMAL -> 192
             Verbosity.DETAILED -> 384
         }
+        Log.d(TAG, "describeScene: verbosity=$verbosity maxTokens=$maxTokens jpeg=${jpegBytes.size} bytes")
+        val startTime = System.currentTimeMillis()
         val result = inferenceMutex.withLock {
             engine.describeImage(jpegBytes, prompt, maxTokens)
+        }
+        val elapsed = System.currentTimeMillis() - startTime
+        Log.i(TAG, "describeScene: ${result.length} chars in ${elapsed}ms")
+        if (result.isBlank()) {
+            Log.w(TAG, "describeScene: VLM returned empty result")
         }
         val objects = extractObjects(result)
         SceneDescription(
@@ -88,26 +113,40 @@ class VisionModel(private val context: Context) {
     suspend fun detectObjects(jpegBytes: ByteArray): List<DetectedObject> =
         withContext(Dispatchers.Default) {
             val prompt = "List every object you can see with its position. Format: object_name (position)"
+            Log.d(TAG, "detectObjects: jpeg=${jpegBytes.size} bytes")
+            val startTime = System.currentTimeMillis()
             val result = inferenceMutex.withLock {
                 engine.describeImage(jpegBytes, prompt, 256)
             }
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.d(TAG, "detectObjects: ${result.length} chars in ${elapsed}ms")
             extractObjects(result)
         }
 
     /** Read text from the image (OCR). */
     suspend fun readText(jpegBytes: ByteArray): String = withContext(Dispatchers.Default) {
         val prompt = "Read all visible text in this image, in natural reading order (top to bottom, left to right). Only output the text content."
-        inferenceMutex.withLock {
+        Log.d(TAG, "readText: jpeg=${jpegBytes.size} bytes")
+        val startTime = System.currentTimeMillis()
+        val result = inferenceMutex.withLock {
             engine.describeImage(jpegBytes, prompt, 384)
         }
+        val elapsed = System.currentTimeMillis() - startTime
+        Log.i(TAG, "readText: ${result.length} chars in ${elapsed}ms")
+        result
     }
 
     /** Answer a follow-up question about the image. */
     suspend fun askAboutImage(jpegBytes: ByteArray, question: String): String =
         withContext(Dispatchers.Default) {
-            inferenceMutex.withLock {
+            Log.d(TAG, "askAboutImage: jpeg=${jpegBytes.size} bytes, question='$question'")
+            val startTime = System.currentTimeMillis()
+            val result = inferenceMutex.withLock {
                 engine.describeImage(jpegBytes, question, 256)
             }
+            val elapsed = System.currentTimeMillis() - startTime
+            Log.d(TAG, "askAboutImage: ${result.length} chars in ${elapsed}ms")
+            result
         }
 
     fun release() {
